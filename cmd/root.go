@@ -8,8 +8,10 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "mycolab",
-	Short: "mycolab manages multiple colab-cli workspaces/accounts via switchable profiles",
+	Use:           "mycolab",
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	Short:         "mycolab manages multiple colab-cli workspaces/accounts via switchable profiles",
 	Long: `mycolab manages multiple colab-cli workspaces (accounts) as switchable profiles.
 
 Each profile keeps its own session list and login token under

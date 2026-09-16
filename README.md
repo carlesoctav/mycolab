@@ -54,7 +54,7 @@ Profiles live under `~/.config/mycolab`:
 `colab ...` commands operate on that workspace/account with no extra flags.
 Pre-existing real files are moved aside to `*.bak` (numbered if taken).
 
-`mycolab ssh` writes a single `Host colab` block (ProxyCommand over
+`mycolab ssh` writes a `Host colab` block (ProxyCommand over
 `colab ssh --proxy-mode`) into a separate `~/.ssh/colab_config`, following
 the active profile. Your main `~/.ssh/config` needs one line to pick it up:
 
@@ -62,7 +62,12 @@ the active profile. Your main `~/.ssh/config` needs one line to pick it up:
 Include ~/.ssh/colab_config
 ```
 
-`mycolab ssh` offers to append it when missing; otherwise add it by hand.
+`mycolab ssh` offers to add it (in global scope, before any Host block — an
+Include buried inside a Host block would not apply); otherwise add it by hand.
+The generated entry mirrors colab's own ssh options (`User root`, no
+host-key checking). Keep your main config free of its own `Host colab`
+block — ssh uses the first match, so a duplicate would shadow the managed
+entry (the command verifies the effective config and errors if that happens).
 
 ## Notes
 

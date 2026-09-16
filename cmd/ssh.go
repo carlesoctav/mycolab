@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/carlesoctav/mycolab/pkg/profile"
+	"github.com/carlesoctav/mycolab/pkg/sshconfig"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -22,9 +24,10 @@ With a session name, that session is used directly. Without one, an
 interactive picker is shown (j/k or arrow keys to move, Enter to select).
 
 The entry uses 'colab ssh --proxy-mode' as its ProxyCommand and follows the
-active mycolab profile. Your main ~/.ssh/config must contain
-'Include ~/.ssh/colab_config' (this command offers to add it); afterwards
-connect with 'ssh colab'.`,
+active mycolab profile. It is kept clean (no RemoteCommand) so editors can
+run their own remote commands. Your main ~/.ssh/config must contain
+'Include ~/.ssh/colab_config' in global scope, before any Host block (this
+command offers to add it); afterwards connect with 'ssh colab'.`,
 	ValidArgsFunction: completeSessionNames,
 	Args:              cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -79,10 +82,18 @@ connect with 'ssh colab'.`,
 		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 			return err
 		}
+		// Options mirror colab's own ssh invocation (_ssh_base_args plus
+		// target root@colab-runtime): the bridge needs User root and
+		// disabled host-key checking.
 		block := fmt.Sprintf(`# Managed by mycolab — regenerated on every 'mycolab ssh' run, manual edits will be lost.
 # Profile: %s | Session: %s
 Host colab
+    HostName colab-runtime
+    User root
     ProxyCommand colab ssh --proxy-mode -s %s
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
 `, current, sessionName, sessionName)
 		if err := os.WriteFile(configPath, []byte(block), 0o600); err != nil {
 			return err
@@ -90,6 +101,9 @@ Host colab
 		fmt.Printf("Wrote Host colab (session %q) to %s\n", sessionName, configPath)
 
 		if err := ensureSSHInclude(); err != nil {
+			return err
+		}
+		if err := verifyColabHost(sessionName); err != nil {
 			return err
 		}
 		fmt.Println("Connect with `ssh colab`.")
@@ -134,74 +148,100 @@ func completeSessionNames(cmd *cobra.Command, args []string, toComplete string) 
 }
 
 // ensureSSHInclude makes sure the main ~/.ssh/config includes the
-// mycolab-managed file, offering to append the Include line when needed.
+// mycolab-managed file from global scope (an Include inside a Host block is
+// conditional and would not apply to Host colab).
 func ensureSSHInclude() error {
 	mainConfig, err := profile.MainSSHConfig()
 	if err != nil {
 		return err
 	}
-	included, err := sshConfigHasInclude(mainConfig)
-	if err != nil {
+	content, err := os.ReadFile(mainConfig)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if included {
-		return nil
-	}
 	const includeLine = "Include ~/.ssh/colab_config"
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		fmt.Printf("Add this line to %s to enable the host:\n  %s\n", mainConfig, includeLine)
+	updated, changed := sshconfig.EnsureGlobalInclude(string(content), includeLine, "colab_config")
+	if !changed {
 		return nil
 	}
-	fmt.Printf("%s does not include the mycolab config.\n", mainConfig)
-	if !promptYesNo(fmt.Sprintf("Append `%s` to %s?", includeLine, mainConfig), true) {
-		fmt.Printf("Skipped. Add this line to %s to enable the host:\n  %s\n", mainConfig, includeLine)
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Printf("Add this line near the top of %s (before any Host block) to enable the host:\n  %s\n", mainConfig, includeLine)
+		return nil
+	}
+	backup := ""
+	if len(content) > 0 {
+		backup = sshconfig.BackupPath(mainConfig)
+	}
+	question := fmt.Sprintf("Add global `%s` to %s?", includeLine, mainConfig)
+	if backup != "" {
+		question = fmt.Sprintf("Add global `%s` to %s (backup to %s)?", includeLine, mainConfig, backup)
+	}
+	if !promptYesNo(question, true) {
+		fmt.Printf("Skipped. Add this line near the top of %s (before any Host block) to enable the host:\n  %s\n", mainConfig, includeLine)
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(mainConfig), 0o700); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(mainConfig, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
+	mode := os.FileMode(0o600)
+	if fi, err := os.Stat(mainConfig); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	if backup != "" {
+		if err := os.WriteFile(backup, content, mode); err != nil {
+			return err
+		}
+	}
+	if err := os.WriteFile(mainConfig, []byte(updated), mode); err != nil {
 		return err
 	}
-	defer f.Close()
-	content, _ := os.ReadFile(mainConfig)
-	prefix := ""
-	if len(content) > 0 && !strings.HasSuffix(string(content), "\n") {
-		prefix = "\n"
-	}
-	if _, err := f.WriteString(prefix + includeLine + "\n"); err != nil {
-		return err
-	}
-	fmt.Printf("Appended `%s` to %s\n", includeLine, mainConfig)
+	fmt.Printf("Added global `%s` to %s\n", includeLine, mainConfig)
 	return nil
 }
 
-// sshConfigHasInclude reports whether path contains an Include directive
-// covering the mycolab ssh config. A missing file counts as not included.
-func sshConfigHasInclude(path string) (bool, error) {
-	content, err := os.ReadFile(path)
+// verifyColabHost checks via `ssh -G` that the managed host actually
+// resolves to the managed ProxyCommand. A missing ssh binary skips the check.
+// MYCOLAB_SSH_CONFIG overrides the config file under test (ssh ignores $HOME
+// when locating its own config, so tests point it at a fixture with -F).
+func verifyColabHost(session string) error {
+	return verifyManagedHost("colab", session)
+}
+
+func verifyManagedHost(host, session string) error {
+	sshBin, err := exec.LookPath("ssh")
 	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
+		return nil
 	}
-	for _, line := range strings.Split(string(content), "\n") {
-		if i := strings.Index(line, "#"); i != -1 {
-			line = line[:i]
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 || !strings.EqualFold(fields[0], "Include") {
-			continue
-		}
-		for _, pattern := range fields[1:] {
-			if strings.Contains(pattern, "colab_config") {
-				return true, nil
-			}
+	args := []string{"-G", host}
+	if alt := os.Getenv("MYCOLAB_SSH_CONFIG"); alt != "" {
+		args = []string{"-F", alt, "-G", host}
+	}
+	out, err := exec.Command(sshBin, args...).Output()
+	if err != nil {
+		return nil
+	}
+	proxy := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		if rest, ok := strings.CutPrefix(line, "proxycommand "); ok {
+			proxy = rest
+			break
 		}
 	}
-	return false, nil
+	if proxy == "" {
+		return fmt.Errorf("'ssh %s' has no ProxyCommand: the 'Include ~/.ssh/colab_config' line may be missing or inactive", host)
+	}
+	pinned := false
+	fields := strings.Fields(proxy)
+	for i, f := range fields {
+		if f == "-s" && i+1 < len(fields) && fields[i+1] == session {
+			pinned = true
+			break
+		}
+	}
+	if !strings.Contains(proxy, "--proxy-mode") || !pinned {
+		return fmt.Errorf("'ssh %s' is shadowed by another config block (effective ProxyCommand: %s). Remove the conflicting 'Host %s' block and re-run `mycolab ssh`", host, proxy, host)
+	}
+	return nil
 }
 
 func promptYesNo(question string, def bool) bool {
