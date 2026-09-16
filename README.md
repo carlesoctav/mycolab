@@ -5,6 +5,22 @@ Go + Cobra, modeled on the `ref/agys` project structure.
 
 ## Install
 
+One-liner (needs `gh` logged in, or `GITHUB_TOKEN` set — the repo is private):
+
+```bash
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" \
+  https://raw.githubusercontent.com/carlesoctav/mycolab/main/install.sh | bash
+```
+
+Pin a version or change the install dir with env vars:
+
+```bash
+curl -fsSL -H "Authorization: Bearer $(gh auth token)" \
+  https://raw.githubusercontent.com/carlesoctav/mycolab/main/install.sh | MYCOLAB_VERSION=v0.1.0 INSTALL_DIR=~/.local/bin bash
+```
+
+From source:
+
 ```bash
 go build -o ./bin/mycolab .
 # then put ./bin/mycolab on your PATH, or:
