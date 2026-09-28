@@ -46,6 +46,19 @@ func TestVerifyColabHost(t *testing.T) {
 	}
 }
 
+func TestManagedSessionName(t *testing.T) {
+	block := colabHostBlock("main", "sess1")
+	if got := managedSessionName(block); got != "sess1" {
+		t.Errorf("managedSessionName(generated) = %q, want sess1", got)
+	}
+	if got := managedSessionName("Host colab\n    HostName x\n"); got != "" {
+		t.Errorf("managedSessionName(no proxy) = %q, want empty", got)
+	}
+	if got := managedSessionName(""); got != "" {
+		t.Errorf("managedSessionName(empty) = %q, want empty", got)
+	}
+}
+
 func TestColabHostBlock(t *testing.T) {
 	block := colabHostBlock("main", "sess1")
 	for _, want := range []string{

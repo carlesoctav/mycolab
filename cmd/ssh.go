@@ -28,6 +28,11 @@ active mycolab profile. It is kept clean (no RemoteCommand) so editors can
 run their own remote commands. Multiplexing (ControlMaster auto) is enabled
 because Colab allows a single concurrent proxy connection: shells, rsync,
 and lsyncd share it instead of tripping HTTP 429 against each other.
+The bundled tmux.conf is also pushed to /root/.tmux.conf on the runtime
+(best-effort; --no-tmux-sync skips this), and the runtime's kernel env is
+installed into sshd so ssh sessions see the same accelerators as the
+console (--no-env-sync skips this). Switching sessions closes the old
+multiplex master so the next connect dials the new runtime.
 Your main ~/.ssh/config must contain
 'Include ~/.ssh/colab_config' in global scope, before any Host block (this
 command offers to add it); afterwards connect with 'ssh colab'.`,
@@ -85,17 +90,28 @@ command offers to add it); afterwards connect with 'ssh colab'.`,
 		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 			return err
 		}
+		prevSession := ""
+		if prevContent, err := os.ReadFile(configPath); err == nil {
+			prevSession = managedSessionName(string(prevContent))
+		}
 		block := colabHostBlock(current, sessionName)
 		if err := os.WriteFile(configPath, []byte(block), 0o600); err != nil {
 			return err
 		}
 		fmt.Printf("Wrote Host colab (session %q) to %s\n", sessionName, configPath)
+		dropStaleMaster(prevSession, sessionName)
 
 		if err := ensureSSHInclude(); err != nil {
 			return err
 		}
 		if err := verifyColabHost(sessionName); err != nil {
 			return err
+		}
+		if noTmux, _ := cmd.Flags().GetBool("no-tmux-sync"); !noTmux {
+			pushTmuxConf(sessionName, sessionExists(sessions, sessionName))
+		}
+		if noEnv, _ := cmd.Flags().GetBool("no-env-sync"); !noEnv {
+			syncRuntimeEnv(sessionName, sessionExists(sessions, sessionName))
 		}
 		fmt.Println("Connect with `ssh colab`.")
 		return nil
@@ -126,6 +142,42 @@ Host colab
     ControlPath ~/.ssh/cm-%%C
     ControlPersist 10m
 `, profile, session, session)
+}
+
+// managedSessionName extracts the `-s` session value from a managed Host
+// block ("" when absent), to detect session switches across runs.
+func managedSessionName(configText string) string {
+	for _, line := range strings.Split(configText, "\n") {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "-s" && i+1 < len(fields) {
+				return fields[i+1]
+			}
+		}
+	}
+	return ""
+}
+
+// dropStaleMaster closes the multiplex master when the managed session
+// changed. The old master is pinned to the previous runtime (ControlPath
+// doesn't cover the session name), so without this a new `ssh colab`
+// would silently land on the wrong VM. Sessions on the old VM die with
+// the master, which is correct: the user just switched away from it.
+// Best-effort and quiet when no master is running.
+func dropStaleMaster(prev, next string) {
+	if prev == "" || prev == next {
+		return
+	}
+	sshBin, err := exec.LookPath("ssh")
+	if err != nil {
+		return
+	}
+	if err := exec.Command(sshBin, "-O", "check", "colab").Run(); err != nil {
+		return
+	}
+	if err := exec.Command(sshBin, "-O", "exit", "colab").Run(); err == nil {
+		fmt.Printf("Session changed (%s -> %s); closed the old multiplex master.\n", prev, next)
+	}
 }
 
 func sessionExists(sessions []profile.Session, name string) bool {

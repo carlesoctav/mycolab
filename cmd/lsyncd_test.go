@@ -40,6 +40,7 @@ func TestScaffoldLsyncd(t *testing.T) {
 		`".git/"`,
 		`".venv/"`,
 		"insist     = true",
+		"nodaemon   = true",
 	} {
 		if !strings.Contains(string(conf), want) {
 			t.Errorf("lsyncd.conf.lua missing %q:\n%s", want, conf)
@@ -49,7 +50,7 @@ func TestScaffoldLsyncd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{dir, target, "mycolab ssh", "colab exec", "Golden rule"} {
+	for _, want := range []string{dir, target, "mycolab ssh", "colab exec", "Golden rule", "tmux", "capture-pane"} {
 		if !strings.Contains(string(doc), want) {
 			t.Errorf("LSYNCD.md missing %q", want)
 		}

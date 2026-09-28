@@ -112,8 +112,8 @@ const lsyncdConfTemplate = `-- lsyncd config: live-sync this dir -> {{.Host}}:{{
 -- One-way local -> remote. Local checkout is the source of truth.
 --
 -- Start:  lsyncd lsyncd.conf.lua   (from {{.Source}})
--- Stop:   kill $(cat /tmp/lsyncd-{{.Slug}}.pid)
--- Logs:   tail -f /tmp/lsyncd-{{.Slug}}.log
+-- Runs in the foreground: stop it with Ctrl+C.
+-- Logs:   tail -f /tmp/lsyncd-{{.Slug}}.log   (from another terminal)
 --
 -- NOTE 1: Colab allows only ONE 'colab ssh' connection per runtime. This
 -- is handled via SSH multiplexing (ControlMaster in ~/.ssh/colab_config,
@@ -122,14 +122,14 @@ const lsyncdConfTemplate = `-- lsyncd config: live-sync this dir -> {{.Host}}:{{
 --
 -- NOTE 2: after 'colab new' + 'mycolab ssh' (fresh VM, empty remote dir):
 --   ssh -O exit {{.Host}}   # drop the stale multiplex master, if any
--- then restart the daemon so its startup full-sync repopulates the new VM:
---   kill $(cat /tmp/lsyncd-{{.Slug}}.pid); lsyncd lsyncd.conf.lua
+-- then restart lsyncd (Ctrl+C, run again) so its startup full-sync
+-- repopulates the new VM.
 
 settings {
     logfile    = "/tmp/lsyncd-{{.Slug}}.log",
     statusFile = "/tmp/lsyncd-{{.Slug}}.status",
     pidfile    = "/tmp/lsyncd-{{.Slug}}.pid",
-    nodaemon   = false,
+    nodaemon   = true,    -- foreground: stop with Ctrl+C
     insist     = true,   -- keep retrying across transient SSH failures
 }
 
@@ -184,9 +184,8 @@ const lsyncdDocTemplate = `# LSYNCD — develop local, run remote
 Run from '{{.Source}}':
 
 ` + "```bash" + `
-lsyncd lsyncd.conf.lua                # start (daemonizes, full sync on startup)
-kill $(cat /tmp/lsyncd-{{.Slug}}.pid) # stop
-tail -f /tmp/lsyncd-{{.Slug}}.log     # logs
+lsyncd lsyncd.conf.lua                # start (foreground, full sync on startup; Ctrl+C stops it)
+tail -f /tmp/lsyncd-{{.Slug}}.log     # logs (from another terminal)
 cat /tmp/lsyncd-{{.Slug}}.status      # pending work
 ` + "```" + `
 
@@ -214,6 +213,30 @@ GPU sanity check:
 echo '!python3 -c "import torch; print(torch.cuda.is_available())"' | colab exec
 ` + "```" + `
 
+## Long-running programs (tmux)
+
+If the code must keep running after you disconnect (training, servers),
+run it under tmux on the remote: the tmux server survives dropped
+connections, and the human can attach later with ` + "`ssh {{.Host}}`" + `
+then ` + "`tmux a -t <name>`" + `.
+
+` + "```bash" + `
+echo '!tmux new -d -s train "python3 train.py 2>&1 | tee train.log"' | colab exec -s <session>
+echo '!tmux ls' | colab exec -s <session>                                     # list sessions
+echo '!tmux capture-pane -p -t train | tail -20' | colab exec -s <session>   # peek at output
+echo '!tmux kill-session -t train' | colab exec -s <session>                 # stop it
+` + "```" + `
+
+Rules for agents:
+
+- Start tmux via ` + "`colab exec`" + ` so the program inherits the full
+  kernel env (GPU/TPU vars). Always pass the same ` + "`-s <session>`" + `
+  on every command once more than one session exists.
+- Log to a file (` + "`tee`" + `) as well as the pane; poll with
+  ` + "`capture-pane`" + `, never block waiting on output.
+- tmux dies with the VM: checkpoint often and pull outputs back (below).
+- One short session name per job (` + "`train`" + `, ` + "`eval-x`" + `).
+
 ## Fetching results back (one-shot pull)
 
 ` + "```bash" + `
@@ -229,7 +252,7 @@ root when you need checkpoints/outputs back.
 mycolab list                 # profiles, * = active
 mycolab use <name>           # switch account/workspace
 colab new --gpu l4           # fresh VM (run project setup after, if any)
-mycolab ssh                  # pick session -> rewrite managed Host block
+mycolab ssh                  # pick session -> Host block + tmux.conf + ssh env sync
 mycolab ssh <session>        # same, non-interactive
 mycolab usage                # remaining compute-unit credits
 colab status | colab sessions
@@ -241,7 +264,7 @@ multiplex master is stale:
 
 ` + "```bash" + `
 ssh -O exit {{.Host}}   # drop the stale master, if any
-kill $(cat /tmp/lsyncd-{{.Slug}}.pid); lsyncd lsyncd.conf.lua  # restart: full re-sync
+# then in the lsyncd terminal: Ctrl+C, run 'lsyncd lsyncd.conf.lua' again for a full re-sync
 ` + "```" + `
 
 ## Warnings for agents

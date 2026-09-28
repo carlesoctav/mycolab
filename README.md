@@ -79,6 +79,21 @@ ones (shells, rsync, lsyncd) share it as extra channels instead of
 tripping HTTP 429 against each other. After `colab new`, drop the stale
 master once with `ssh -O exit colab`.
 
+`mycolab ssh` also pushes the bundled `cmd/tmux.conf` to `/root/.tmux.conf`
+on the runtime (best-effort; `--no-tmux-sync` skips it), so tmux on the
+server matches your local setup. Edit the bundled copy and reinstall to
+change it.
+
+`mycolab ssh` also syncs the runtime's kernel env into sshd (`--no-env-sync`
+skips it). The runtime's sshd spawns shells with a near-empty env, so over
+plain ssh, accelerators are invisible (`nvidia-smi` fails on GPU VMs, jax
+sees only CPU on TPU VMs) while `colab console`/`colab exec` work fine.
+The sync captures the kernel env through the exec door and installs it as
+a managed sshd `SetEnv` block (validated with `sshd -t`, old block
+replaced, listener reloaded; session-specific vars like `SSH_*` are
+excluded). Reconnect `ssh colab` afterwards to pick it up — and note the
+same-session case deliberately leaves your multiplex master alone.
+
 ## Live sync (lsyncd)
 
 `mycolab lsyncd <source> <target>` scaffolds one-way live sync
@@ -86,7 +101,7 @@ master once with `ssh -O exit colab`.
 
 ```bash
 mycolab lsyncd ~/personal/try-agent /content/try-agent
-cd ~/personal/try-agent && lsyncd lsyncd.conf.lua
+cd ~/personal/try-agent && lsyncd lsyncd.conf.lua  # foreground; Ctrl+C stops it
 ```
 
 It writes `lsyncd.conf.lua` (one-way sync over the `colab` host, ignoring
