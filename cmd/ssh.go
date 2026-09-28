@@ -25,7 +25,10 @@ interactive picker is shown (j/k or arrow keys to move, Enter to select).
 
 The entry uses 'colab ssh --proxy-mode' as its ProxyCommand and follows the
 active mycolab profile. It is kept clean (no RemoteCommand) so editors can
-run their own remote commands. Your main ~/.ssh/config must contain
+run their own remote commands. Multiplexing (ControlMaster auto) is enabled
+because Colab allows a single concurrent proxy connection: shells, rsync,
+and lsyncd share it instead of tripping HTTP 429 against each other.
+Your main ~/.ssh/config must contain
 'Include ~/.ssh/colab_config' in global scope, before any Host block (this
 command offers to add it); afterwards connect with 'ssh colab'.`,
 	ValidArgsFunction: completeSessionNames,
@@ -82,19 +85,7 @@ command offers to add it); afterwards connect with 'ssh colab'.`,
 		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 			return err
 		}
-		// Options mirror colab's own ssh invocation (_ssh_base_args plus
-		// target root@colab-runtime): the bridge needs User root and
-		// disabled host-key checking.
-		block := fmt.Sprintf(`# Managed by mycolab — regenerated on every 'mycolab ssh' run, manual edits will be lost.
-# Profile: %s | Session: %s
-Host colab
-    HostName colab-runtime
-    User root
-    ProxyCommand colab ssh --proxy-mode -s %s
-    StrictHostKeyChecking no
-    UserKnownHostsFile /dev/null
-    LogLevel ERROR
-`, current, sessionName, sessionName)
+		block := colabHostBlock(current, sessionName)
 		if err := os.WriteFile(configPath, []byte(block), 0o600); err != nil {
 			return err
 		}
@@ -109,6 +100,32 @@ Host colab
 		fmt.Println("Connect with `ssh colab`.")
 		return nil
 	},
+}
+
+// colabHostBlock renders the managed 'Host colab' entry. Options mirror
+// colab's own ssh invocation (_ssh_base_args plus target
+// root@colab-runtime): the bridge needs User root and disabled host-key
+// checking. Agent forwarding stays on so keys held locally work on the
+// runtime. Multiplexing is on because Colab allows only one concurrent
+// proxy connection per runtime: the first connection becomes the master
+// and later ones (interactive shells, rsync, lsyncd) share it as extra
+// channels instead of fighting over the slot with HTTP 429.
+func colabHostBlock(profile, session string) string {
+	return fmt.Sprintf(`# Managed by mycolab — regenerated on every 'mycolab ssh' run, manual edits will be lost.
+# Profile: %s | Session: %s
+Host colab
+    HostName colab-runtime
+    User root
+    ProxyCommand colab ssh --proxy-mode -s %s
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+    ForwardAgent yes
+    AddKeysToAgent yes
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%%C
+    ControlPersist 10m
+`, profile, session, session)
 }
 
 func sessionExists(sessions []profile.Session, name string) bool {

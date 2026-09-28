@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +43,22 @@ func TestVerifyColabHost(t *testing.T) {
 	)
 	if err := verifyColabHost("sess1"); err == nil {
 		t.Fatal("missing ProxyCommand: nil error, want error")
+	}
+}
+
+func TestColabHostBlock(t *testing.T) {
+	block := colabHostBlock("main", "sess1")
+	for _, want := range []string{
+		"Host colab\n",
+		"ProxyCommand colab ssh --proxy-mode -s sess1\n",
+		"ForwardAgent yes\n",
+		"AddKeysToAgent yes\n",
+		"ControlMaster auto\n",
+		"ControlPath ~/.ssh/cm-%C\n",
+		"ControlPersist 10m\n",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("colabHostBlock missing %q:\n%s", want, block)
+		}
 	}
 }

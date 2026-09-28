@@ -38,6 +38,9 @@ mycolab use work          # switch directly
 mycolab ssh               # pick a session -> writes Host colab
 mycolab ssh trainer       # same, without the picker
 ssh colab                 # connect (after the Include step below)
+mycolab lsyncd ~/personal/try-agent /content/try-agent  # scaffold live-sync files
+mycolab usage             # remaining compute-unit credits per profile
+mycolab usage work        # just one account (--json for scripts)
 ```
 
 ## How it works
@@ -68,6 +71,30 @@ The generated entry mirrors colab's own ssh options (`User root`, no
 host-key checking). Keep your main config free of its own `Host colab`
 block — ssh uses the first match, so a duplicate would shadow the managed
 entry (the command verifies the effective config and errors if that happens).
+
+Colab allows a single concurrent proxy connection per runtime, so the
+managed entry enables multiplexing (`ControlMaster auto`,
+`ControlPersist 10m`): the first connection becomes the master and later
+ones (shells, rsync, lsyncd) share it as extra channels instead of
+tripping HTTP 429 against each other. After `colab new`, drop the stale
+master once with `ssh -O exit colab`.
+
+## Live sync (lsyncd)
+
+`mycolab lsyncd <source> <target>` scaffolds one-way live sync
+(local checkout → remote path) into any project dir:
+
+```bash
+mycolab lsyncd ~/personal/try-agent /content/try-agent
+cd ~/personal/try-agent && lsyncd lsyncd.conf.lua
+```
+
+It writes `lsyncd.conf.lua` (one-way sync over the `colab` host, ignoring
+`.git/`/`.venv/`, never deleting remote-only outputs) and `LSYNCD.md`
+(agent/human doc: develop locally, run on the remote, session lifecycle).
+Flags: `--host` (default `colab`), `--force` to overwrite. After
+`colab new` + `mycolab ssh`, restart the daemon so its startup full-sync
+repopulates the fresh VM.
 
 ## Notes
 
