@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,11 +19,27 @@ import (
 const (
 	colabExecAttempts   = 3
 	colabExecRetryDelay = 3 * time.Second
+	// colabCallTimeout bounds every colab subprocess call: the kernel
+	// client has hung indefinitely before, and a stuck push step must
+	// never wedge `mycolab ssh` forever.
+	colabCallTimeout = 120 * time.Second
+	// colabRemoteTimeout bounds execution on the runtime itself; passed
+	// through to `colab exec` (which defaults to 30s).
+	colabRemoteTimeout = "100"
 )
 
 // runColab runs the colab CLI with the given stdin, returning combined output.
 func runColab(colabBin, stdin string, args ...string) (string, error) {
-	cmd := exec.Command(colabBin, args...)
+	return runColabTimeout(colabBin, stdin, colabCallTimeout, args...)
+}
+
+func runColabTimeout(colabBin, stdin string, timeout time.Duration, args ...string) (string, error) {
+	if len(args) > 0 && args[0] == "exec" {
+		args = append(args, "--timeout", colabRemoteTimeout)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, colabBin, args...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -87,7 +104,7 @@ func init() {
 // failures warn, never fail `mycolab ssh`.
 func syncRuntimeEnv(session string, sessionKnown bool) {
 	if !sessionKnown {
-		fmt.Printf("Note: session %q does not exist yet; skipping env sync (re-run `mycolab ssh %s` once it does).\n", session, session)
+		fmt.Printf("Note: session %q does not exist yet; skipping env sync (re-run `mycolab ssh -s %s` once it does).\n", session, session)
 		return
 	}
 	colabBin, err := exec.LookPath("colab")
@@ -144,5 +161,5 @@ func syncRuntimeEnv(session string, sessionKnown bool) {
 	if len(skipped) > 0 {
 		fmt.Printf(" (%d skipped: newline values)", len(skipped))
 	}
-	fmt.Println("; reconnect `ssh colab` to pick them up.")
+	fmt.Printf("; reconnect `ssh %s` to pick them up.\n", session)
 }

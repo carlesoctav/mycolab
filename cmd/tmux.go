@@ -31,7 +31,7 @@ func tmuxPushStdin() string {
 // so any failure only warns and never fails `mycolab ssh`.
 func pushTmuxConf(session string, sessionKnown bool) {
 	if !sessionKnown {
-		fmt.Printf("Note: session %q does not exist yet; skipping tmux.conf push (re-run `mycolab ssh %s` once it does).\n", session, session)
+		fmt.Printf("Note: session %q does not exist yet; skipping tmux.conf push (re-run `mycolab ssh -s %s` once it does).\n", session, session)
 		return
 	}
 	colabBin, err := exec.LookPath("colab")

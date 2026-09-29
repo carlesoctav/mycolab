@@ -21,23 +21,42 @@ absolute remote path it syncs to. Example:
     mycolab lsyncd ~/personal/try-agent /content/try-agent
 
 The generated lsyncd.conf.lua syncs one-way local -> remote over the given
-SSH host (default 'colab', managed by 'mycolab ssh'), ignoring .git/ and
+SSH host (the '-s/--session' session by default, whose entry is managed by
+'mycolab ssh -s <session>'; pass --host to override), ignoring .git/ and
 .venv/. LSYNCD.md documents the setup for humans and coding agents:
 develop locally, run/test on the remote.
 
 Existing files are left alone unless --force is given.`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		host, _ := cmd.Flags().GetString("host")
+		hostFlag, _ := cmd.Flags().GetString("host")
+		sessionFlag, _ := cmd.Flags().GetString("session")
+		host, err := resolveSyncHost(hostFlag, sessionFlag)
+		if err != nil {
+			return err
+		}
 		force, _ := cmd.Flags().GetBool("force")
 		return scaffoldLsyncd(args[0], args[1], host, force)
 	},
 }
 
 func init() {
-	lsyncdCmd.Flags().String("host", "colab", "SSH host to sync to (managed by `mycolab ssh`)")
+	lsyncdCmd.Flags().String("host", "", "SSH host to sync to (defaults to the -s session)")
 	lsyncdCmd.Flags().BoolP("force", "f", false, "overwrite existing lsyncd.conf.lua / LSYNCD.md")
 	rootCmd.AddCommand(lsyncdCmd)
+}
+
+// resolveSyncHost picks the SSH host for live sync: an explicit --host
+// wins, otherwise the -s session (whose 'Host <session>' entry 'mycolab
+// ssh -s <session>' manages).
+func resolveSyncHost(host, session string) (string, error) {
+	if host != "" {
+		return host, nil
+	}
+	if session != "" {
+		return session, nil
+	}
+	return "", fmt.Errorf("no SSH host selected (pass `--host <host>` or `-s <session>`)")
 }
 
 // scaffoldLsyncd renders the sync config and agent doc into sourceDir.
@@ -111,16 +130,16 @@ func slugify(base string) string {
 const lsyncdConfTemplate = `-- lsyncd config: live-sync this dir -> {{.Host}}:{{.Target}}.
 -- One-way local -> remote. Local checkout is the source of truth.
 --
--- Start:  lsyncd lsyncd.conf.lua   (from {{.Source}})
+-- Start:  mycolab sync   (from {{.Source}}; runs lsyncd lsyncd.conf.lua)
 -- Runs in the foreground: stop it with Ctrl+C.
 -- Logs:   tail -f /tmp/lsyncd-{{.Slug}}.log   (from another terminal)
 --
 -- NOTE 1: Colab allows only ONE 'colab ssh' connection per runtime. This
 -- is handled via SSH multiplexing (ControlMaster in ~/.ssh/colab_config,
--- managed by 'mycolab ssh'): interactive shells and lsyncd's rsync share
--- one connection instead of tripping HTTP 429 against each other.
+-- managed by 'mycolab ssh -s <session>'): interactive shells and lsyncd's
+-- rsync share one connection instead of tripping HTTP 429 against each other.
 --
--- NOTE 2: after 'colab new' + 'mycolab ssh' (fresh VM, empty remote dir):
+-- NOTE 2: after 'colab new' + 'mycolab ssh -s <session>' (fresh VM, empty remote dir):
 --   ssh -O exit {{.Host}}   # drop the stale multiplex master, if any
 -- then restart lsyncd (Ctrl+C, run again) so its startup full-sync
 -- repopulates the new VM.
@@ -136,7 +155,7 @@ settings {
 sync {
     default.rsyncssh,
     source    = "{{.Source}}",
-    host      = "{{.Host}}", -- managed by 'mycolab ssh'
+    host      = "{{.Host}}", -- managed by 'mycolab ssh -s <session>'
     targetdir = "{{.Target}}",
     delay     = 1,
 
@@ -177,14 +196,14 @@ const lsyncdDocTemplate = `# LSYNCD — develop local, run remote
 | --- | --- |
 | Local source | '{{.Source}}' |
 | Remote target | '{{.Host}}:{{.Target}}' |
-| SSH host | '{{.Host}}' (` + "`~/.ssh/colab_config`" + `, managed by ` + "`mycolab ssh`" + `) |
+| SSH host | '{{.Host}}' (` + "`~/.ssh/colab_config`" + `, managed by ` + "`mycolab ssh -s <session>`" + `) |
 
 ## Sync daemon (lsyncd)
 
 Run from '{{.Source}}':
 
 ` + "```bash" + `
-lsyncd lsyncd.conf.lua                # start (foreground, full sync on startup; Ctrl+C stops it)
+mycolab sync                        # start (foreground, full sync on startup; Ctrl+C stops it)
 tail -f /tmp/lsyncd-{{.Slug}}.log     # logs (from another terminal)
 cat /tmp/lsyncd-{{.Slug}}.status      # pending work
 ` + "```" + `
@@ -240,11 +259,16 @@ Rules for agents:
 ## Fetching results back (one-shot pull)
 
 ` + "```bash" + `
-rsync -avz --exclude='.git/' --exclude='.venv/' -e ssh {{.Host}}:{{.Target}}/ ./
+mycolab pull   # from '{{.Source}}': reads lsyncd.conf.lua, syncs remote -> local
 ` + "```" + `
 
-This overwrites local files with remote versions — run it from the project
-root when you need checkpoints/outputs back.
+This overwrites local files with remote versions when you need
+checkpoints/outputs back (local-only files are left alone). It runs the
+equivalent of:
+
+` + "```bash" + `
+rsync -avz --exclude='.git/' --exclude='.venv/' -e ssh {{.Host}}:{{.Target}}/ {{.Source}}/
+` + "```" + `
 
 ## Session lifecycle (mycolab / colab)
 
@@ -252,19 +276,18 @@ root when you need checkpoints/outputs back.
 mycolab list                 # profiles, * = active
 mycolab use <name>           # switch account/workspace
 colab new --gpu l4           # fresh VM (run project setup after, if any)
-mycolab ssh                  # pick session -> Host block + tmux.conf + ssh env sync
-mycolab ssh <session>        # same, non-interactive
+mycolab ssh -s <session>     # Host block + remote setup (tmux, env, hosts)
 mycolab usage                # remaining compute-unit credits
 colab status | colab sessions
 colab stop -s <session>      # release the VM when done
 ` + "```" + `
 
-After 'colab new' + 'mycolab ssh' the remote dir is empty and the old
-multiplex master is stale:
+After 'colab new' + 'mycolab ssh -s <session>' the remote dir is empty
+and the old multiplex master is stale:
 
 ` + "```bash" + `
 ssh -O exit {{.Host}}   # drop the stale master, if any
-# then in the lsyncd terminal: Ctrl+C, run 'lsyncd lsyncd.conf.lua' again for a full re-sync
+# then in the lsyncd terminal: Ctrl+C, run 'mycolab sync' again for a full re-sync
 ` + "```" + `
 
 ## Warnings for agents

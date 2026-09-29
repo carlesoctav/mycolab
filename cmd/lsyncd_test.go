@@ -50,7 +50,7 @@ func TestScaffoldLsyncd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{dir, target, "mycolab ssh", "colab exec", "Golden rule", "tmux", "capture-pane"} {
+	for _, want := range []string{dir, target, "mycolab ssh", "mycolab pull", "mycolab sync", "colab exec", "Golden rule", "tmux", "capture-pane"} {
 		if !strings.Contains(string(doc), want) {
 			t.Errorf("LSYNCD.md missing %q", want)
 		}

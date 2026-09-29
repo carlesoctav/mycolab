@@ -53,11 +53,11 @@ func ParseNulEnv(data []byte) map[string]string {
 	return vars
 }
 
-// DecodeCapture decodes `colab exec` output of `env -0 | base64 -w0`.
-// Exec mixes `[colab]` notices (and remote stderr) into stdout, and
+// ExtractBase64 pulls a base64 payload out of `colab exec` output. Exec
+// mixes `[colab]` notices (and remote stderr) into stdout, and
 // occasionally renders rich spinners/panels instead of plain output, so
 // only strict base64-alphabet lines are kept and the rest is dropped.
-func DecodeCapture(output string) (map[string]string, error) {
+func ExtractBase64(output string) ([]byte, error) {
 	var sb strings.Builder
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
@@ -71,6 +71,16 @@ func DecodeCapture(output string) (map[string]string, error) {
 	raw, err := base64.StdEncoding.DecodeString(sb.String())
 	if err != nil {
 		return nil, fmt.Errorf("capture is not base64: %w", err)
+	}
+	return raw, nil
+}
+
+// DecodeCapture decodes `colab exec` output of `env -0 | base64 -w0`
+// into a variable map.
+func DecodeCapture(output string) (map[string]string, error) {
+	raw, err := ExtractBase64(output)
+	if err != nil {
+		return nil, err
 	}
 	vars := ParseNulEnv(raw)
 	if len(vars) == 0 {

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestVerifyColabHost(t *testing.T) {
+func TestVerifyManagedHost(t *testing.T) {
 	if _, err := exec.LookPath("ssh"); err != nil {
 		t.Skip("ssh binary not available")
 	}
@@ -28,41 +28,42 @@ func TestVerifyColabHost(t *testing.T) {
 
 	write(
 		"Include "+managed+"\nHost other\n    HostName x\n",
-		"Host colab\n    ProxyCommand colab ssh --proxy-mode -s sess1\n",
+		"Host sess1\n    ProxyCommand colab ssh --proxy-mode -s sess1\n",
 	)
-	if err := verifyColabHost("sess1"); err != nil {
+	if err := verifyManagedHost("sess1", "sess1"); err != nil {
 		t.Fatalf("matching session: %v", err)
 	}
-	if err := verifyColabHost("sess2"); err == nil {
+	if err := verifyManagedHost("sess1", "sess2"); err == nil {
 		t.Fatal("mismatched session: nil error, want shadow error")
 	}
 
 	write(
-		"Host colab\n    HostName x\n",
-		"Host colab\n    ProxyCommand colab ssh --proxy-mode -s sess1\n",
+		"Host sess1\n    HostName x\n",
+		"Host sess1\n    ProxyCommand colab ssh --proxy-mode -s sess1\n",
 	)
-	if err := verifyColabHost("sess1"); err == nil {
+	if err := verifyManagedHost("sess1", "sess1"); err == nil {
 		t.Fatal("missing ProxyCommand: nil error, want error")
 	}
 }
 
-func TestManagedSessionName(t *testing.T) {
+func TestManagedProfileName(t *testing.T) {
 	block := colabHostBlock("main", "sess1")
-	if got := managedSessionName(block); got != "sess1" {
-		t.Errorf("managedSessionName(generated) = %q, want sess1", got)
+	if got := managedProfileName(block); got != "main" {
+		t.Errorf("managedProfileName(generated) = %q, want main", got)
 	}
-	if got := managedSessionName("Host colab\n    HostName x\n"); got != "" {
-		t.Errorf("managedSessionName(no proxy) = %q, want empty", got)
+	if got := managedProfileName("Host sess1\n    HostName x\n"); got != "" {
+		t.Errorf("managedProfileName(no tag) = %q, want empty", got)
 	}
-	if got := managedSessionName(""); got != "" {
-		t.Errorf("managedSessionName(empty) = %q, want empty", got)
+	if got := managedProfileName(""); got != "" {
+		t.Errorf("managedProfileName(empty) = %q, want empty", got)
 	}
 }
 
 func TestColabHostBlock(t *testing.T) {
 	block := colabHostBlock("main", "sess1")
 	for _, want := range []string{
-		"Host colab\n",
+		"# Profile: main | Session: sess1\n",
+		"Host sess1\n",
 		"ProxyCommand colab ssh --proxy-mode -s sess1\n",
 		"ForwardAgent yes\n",
 		"AddKeysToAgent yes\n",
