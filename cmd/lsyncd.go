@@ -276,7 +276,7 @@ rsync -avz --exclude='.git/' --exclude='.venv/' -e ssh {{.Host}}:{{.Target}}/ {{
 mycolab list                 # profiles, * = active
 mycolab use <name>           # switch account/workspace
 colab new --gpu l4           # fresh VM (run project setup after, if any)
-mycolab ssh -s <session>     # Host block + remote setup (tmux, env, hosts)
+mycolab ssh -s <session>     # Host block + remote setup (tmux, env, hosts, tools)
 mycolab usage                # remaining compute-unit credits
 colab status | colab sessions
 colab stop -s <session>      # release the VM when done

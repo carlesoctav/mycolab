@@ -42,6 +42,7 @@ mycolab lsyncd -s trainer ~/personal/try-agent /content/try-agent  # scaffold li
 mycolab pull              # one-shot remote -> local over the lsyncd mapping
 mycolab sync              # run lsyncd live sync in the foreground
 mycolab install -s trainer ruff  # uv tool install on the runtime
+mycolab tool -s trainer muse   # install tool + credentials on the runtime
 mycolab usage             # remaining compute-unit credits per profile
 mycolab usage work        # just one account (--json for scripts)
 ```
@@ -107,6 +108,12 @@ and single-attempt clients (e.g. LMCache over tcp://localhost) then hang
 against nothing; the fix drops the token from the ::1 line (backup at
 /etc/hosts.bak.mycolab) and verifies with getent.
 
+It also installs base CLI tools on the runtime (`--no-tools` skips it):
+`fd`, `rg` and `jq` via apt, plus the latest stable Neovim as an
+AppImage in `/usr/local/bin` (same approach as `ubuntu-tasks/nvim.sh`,
+tracking the stable release). Re-runs are a no-op when everything is
+already present.
+
 ## Live sync (lsyncd)
 
 `mycolab lsyncd -s <session> <source> <target>` scaffolds one-way live
@@ -140,6 +147,19 @@ mycolab install -s trainer ruff
 
 Unlike the best-effort `mycolab ssh` push steps, a failure here fails the
 command. uv must already exist on the runtime.
+
+## Tools on a runtime
+
+`mycolab tool -s <session> <tool>` installs a CLI tool on the runtime
+and copies its local config/credential files over when available:
+
+```bash
+mycolab tool -s trainer muse
+```
+
+Supported tools: `muse` (upstream installer, then
+`~/.config/muse/{auth,settings,trust}.json` → `/root/.config/muse/`).
+Each tool is one spec file under `pkg/tools/`; failures fail the command.
 
 ## Notes
 

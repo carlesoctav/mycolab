@@ -26,6 +26,10 @@ const (
 	// colabRemoteTimeout bounds execution on the runtime itself; passed
 	// through to `colab exec` (which defaults to 30s).
 	colabRemoteTimeout = "100"
+	// execLongCallTimeout and execLongRemoteTimeout bound the slow steps
+	// (apt installs, tool downloads) that outlast the defaults above.
+	execLongCallTimeout   = 360 * time.Second
+	execLongRemoteTimeout = "300"
 )
 
 // runColab runs the colab CLI with the given stdin, returning combined output.
@@ -34,8 +38,12 @@ func runColab(colabBin, stdin string, args ...string) (string, error) {
 }
 
 func runColabTimeout(colabBin, stdin string, timeout time.Duration, args ...string) (string, error) {
+	return runColabTimeouts(colabBin, stdin, timeout, colabRemoteTimeout, args...)
+}
+
+func runColabTimeouts(colabBin, stdin string, timeout time.Duration, remoteTimeout string, args ...string) (string, error) {
 	if len(args) > 0 && args[0] == "exec" {
-		args = append(args, "--timeout", colabRemoteTimeout)
+		args = append(args, "--timeout", remoteTimeout)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -53,6 +61,12 @@ func runColabTimeout(colabBin, stdin string, timeout time.Duration, args ...stri
 
 // runColabForMarker runs until marker appears in the output.
 func runColabForMarker(colabBin, stdin, marker string, args ...string) (string, error) {
+	return runColabForMarkerTimeouts(colabBin, stdin, marker, colabCallTimeout, colabRemoteTimeout, args...)
+}
+
+// runColabForMarkerTimeouts is runColabForMarker with explicit local and
+// remote timeouts, for steps (like apt installs) that outlast the defaults.
+func runColabForMarkerTimeouts(colabBin, stdin, marker string, timeout time.Duration, remoteTimeout string, args ...string) (string, error) {
 	var last string
 	var err error
 	for i := 0; i < colabExecAttempts; i++ {
@@ -60,7 +74,7 @@ func runColabForMarker(colabBin, stdin, marker string, args ...string) (string, 
 			time.Sleep(colabExecRetryDelay)
 		}
 		var out string
-		out, err = runColab(colabBin, stdin, args...)
+		out, err = runColabTimeouts(colabBin, stdin, timeout, remoteTimeout, args...)
 		if err == nil && strings.Contains(out, marker) {
 			return out, nil
 		}

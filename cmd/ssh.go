@@ -38,8 +38,9 @@ and lsyncd share it instead of tripping HTTP 429 against each other.
 The bundled tmux.conf is also pushed to /root/.tmux.conf on the runtime
 (best-effort; --no-tmux-sync skips this), the runtime's kernel env is
 installed into sshd so ssh sessions see the same accelerators as the
-console (--no-env-sync skips this), and localhost is pinned to IPv4 in
-/etc/hosts (--no-hosts-fix skips this). Re-running after switching
+console (--no-env-sync skips this), localhost is pinned to IPv4 in
+/etc/hosts (--no-hosts-fix skips this), and base CLI tools (fd, rg, jq,
+nvim) are installed via apt (--no-tools skips this). Re-running after switching
 profiles closes the stale multiplex master so the next connect dials the
 new runtime.
 Your main ~/.ssh/config must contain
@@ -111,6 +112,9 @@ command offers to add it); afterwards connect with 'ssh <session>'.`,
 		}
 		if noHosts, _ := cmd.Flags().GetBool("no-hosts-fix"); !noHosts {
 			pushLocalhostFix(sessionName, known)
+		}
+		if noTools, _ := cmd.Flags().GetBool("no-tools"); !noTools {
+			pushBaseTools(sessionName, known)
 		}
 		fmt.Printf("Connect with `ssh %s`.\n", sessionName)
 		return nil
