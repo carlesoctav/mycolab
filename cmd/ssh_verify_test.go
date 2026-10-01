@@ -70,6 +70,8 @@ func TestColabHostBlock(t *testing.T) {
 		"ControlMaster auto\n",
 		"ControlPath ~/.ssh/cm-%C\n",
 		"ControlPersist 10m\n",
+		"ServerAliveInterval 60\n",
+		"ServerAliveCountMax 3\n",
 	} {
 		if !strings.Contains(block, want) {
 			t.Errorf("colabHostBlock missing %q:\n%s", want, block)

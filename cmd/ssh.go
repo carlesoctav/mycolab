@@ -133,7 +133,12 @@ const managedFileHeader = "# Managed by mycolab — one 'Host <session>' block p
 // runtime. Multiplexing is on because Colab allows only one concurrent
 // proxy connection per runtime: the first connection becomes the master
 // and later ones (interactive shells, rsync, lsyncd) share it as extra
-// channels instead of fighting over the slot with HTTP 429.
+// channels instead of fighting over the slot with HTTP 429. Liveness pings
+// stay on because the ProxyCommand bridge is silent when idle and middleboxes
+// (NAT, LB) reap silent websockets: ServerAliveInterval sends a small
+// encrypted ping every 60s (also steady tunnel traffic), and
+// ServerAliveCountMax drops a truly dead peer within ~3 minutes instead of
+// hanging until the next write fails with 'broken pipe'.
 func colabHostBlock(profile, session string) string {
 	return fmt.Sprintf(`# Profile: %s | Session: %s
 Host %s
@@ -148,6 +153,8 @@ Host %s
     ControlMaster auto
     ControlPath ~/.ssh/cm-%%C
     ControlPersist 10m
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
 `, profile, session, session, session)
 }
 
