@@ -132,10 +132,10 @@ install_deps() {
 		export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 	fi
 
-	# 3. colab-cli via uv tool
+	# 3. colab-cli via uv tool (pinned to 0.7.4)
 	if ! command -v colab >/dev/null 2>&1; then
-		echo "Installing colab-cli via uv tool..."
-		uv tool install --force colab-cli || echo "Warning: 'uv tool install colab-cli' failed; install manually with 'uv tool install colab-cli'." >&2
+		echo "Installing colab-cli 0.7.4 via uv tool..."
+		uv tool install --force "google-colab-cli==0.7.4" || echo "Warning: 'uv tool install google-colab-cli==0.7.4' failed; install manually with 'uv tool install google-colab-cli==0.7.4'." >&2
 	else
 		echo "colab-cli is already installed ($(colab --version 2>/dev/null || echo 'ready'))."
 	fi
