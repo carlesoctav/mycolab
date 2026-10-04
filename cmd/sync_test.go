@@ -144,3 +144,53 @@ func TestSyncLiveRunsBinary(t *testing.T) {
 		t.Errorf("syncLive(default, echo stub) = %v, want nil", err)
 	}
 }
+
+func TestRenderLsyncdConfigAndExcludes(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. With .gitignore
+	gitignore := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(gitignore, []byte("data/\n*.pt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	excludes := loadSyncExcludes(dir)
+	foundData, foundPt := false, false
+	for _, e := range excludes {
+		if e == "data/" {
+			foundData = true
+		}
+		if e == "*.pt" {
+			foundPt = true
+		}
+	}
+	if !foundData || !foundPt {
+		t.Errorf("excludes missing expected patterns: %v", excludes)
+	}
+
+	conf := renderLsyncdConfig(dir, "trainer", "/content/proj", false)
+	for _, want := range []string{
+		`source    = "` + dir + `"`,
+		`host      = "trainer"`,
+		`targetdir = "/content/proj"`,
+		`"data/",`,
+		`"*.pt",`,
+		`nodaemon   = true,`,
+	} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("conf missing %q: %s", want, conf)
+		}
+	}
+
+	daemonConf := renderLsyncdConfig(dir, "trainer", "/content/proj", true)
+	if !strings.Contains(daemonConf, "nodaemon   = false,") {
+		t.Errorf("daemonConf should set nodaemon = false: %s", daemonConf)
+	}
+}
+
+func TestPrintAgentInstructions(t *testing.T) {
+	// Simple test verifying printAgentInstructions executes cleanly without panic
+	printAgentInstructions("/home/user/project", "trainer", "/content/project")
+}
+
+

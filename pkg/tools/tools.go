@@ -31,7 +31,11 @@ type Spec struct {
 }
 
 // registry lists every supported tool.
-var registry = []Spec{Muse, Agy}
+var registry = []Spec{Muse, Agy, Hf, HfMount}
+
+// RunTools are installed on every new runtime so `run -v` (HF bucket
+// mounts) works out of the box.
+func RunTools() []Spec { return []Spec{Hf, HfMount} }
 
 // Lookup returns the spec for name (case-insensitive), or an error
 // listing the supported tool names.

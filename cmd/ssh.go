@@ -155,6 +155,7 @@ func runSSHSetup(cmd *cobra.Command, sessionName string) error {
 	}
 	if noTools, _ := cmd.Flags().GetBool("no-tools"); !noTools {
 		pushBaseTools(sessionName, known)
+		pushRunTools(sessionName, known)
 	}
 	fmt.Printf("Connect with `ssh %s`.\n", sessionName)
 	return nil

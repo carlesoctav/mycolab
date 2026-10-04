@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os/exec"
+
+	"github.com/carlesoctav/mycolab/pkg/tools"
 )
 
 // Base CLI tools installed on the runtime by `mycolab new`: fd and rg
@@ -23,9 +25,9 @@ const (
 // fdfind is aliased to fd, and nvim itself is executed as a final gate
 // before the marker.
 func toolsInstallStdin() string {
-	return "!(command -v rg && command -v jq && command -v nvim && (command -v fd || command -v fdfind)) >/dev/null 2>&1 || " +
+	return "!(command -v rg && command -v jq && command -v nvim && (command -v fd || command -v fdfind) && command -v mount.nfs) >/dev/null 2>&1 || " +
 		"(apt-get update -qq && " +
-		"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl fd-find ripgrep jq && " +
+		"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl fd-find ripgrep jq nfs-common && " +
 		"(DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libfuse2 || true) && " +
 		"curl -fsSL -o /usr/local/bin/nvim " + nvimAppImageURL + " && " +
 		"chmod +x /usr/local/bin/nvim && " +
@@ -51,4 +53,23 @@ func pushBaseTools(session string, sessionKnown bool) {
 		return
 	}
 	fmt.Println("Base tools ready on runtime (fd, rg, jq, nvim).")
+}
+
+// pushRunTools installs the tools `run` relies on (hf, hf-mount) via the
+// registry specs. Best-effort like pushBaseTools: failures only warn.
+func pushRunTools(session string, sessionKnown bool) {
+	if !sessionKnown {
+		return
+	}
+	colabBin, err := exec.LookPath("colab")
+	if err != nil {
+		return
+	}
+	for _, spec := range tools.RunTools() {
+		if _, err := runColabForMarkerTimeouts(colabBin, spec.InstallStdin(toolMarker), toolMarker, execLongCallTimeout, execLongRemoteTimeout, "exec", "-s", session); err != nil {
+			fmt.Printf("Note: %s install failed (%v); retry with `mycolab tool -s %s %s`.\n", spec.Name, err, session, spec.Name)
+			continue
+		}
+		fmt.Printf("%s ready on runtime.\n", spec.Name)
+	}
 }

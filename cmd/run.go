@@ -1,0 +1,398 @@
+package cmd
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+// The run pipeline. One orchestrator (execJob) does the same thing wherever
+// it executes: locally for `mycolab run`, or on the always-on server for
+// `mycolab server run` (which stages the dirs on the server and then invokes
+// `mycolab run --staged` there over ssh).
+//
+//	new session -> mount hf buckets -> stage dirs -> rsync stage to colab
+//	-> run the job over ssh (log captured) -> clean the stage dir
+//
+// A job's final step is just an argv executed on the runtime (job.Command).
+// A future `server agent <name> -- <instruction file>` reuses everything
+// above and only differs in how Command is built (the agent CLI invoked on
+// the instruction file, which is staged like any other dir/file); tools and
+// agent credentials are expected to already be on the runtime/server.
+
+// dirMap maps a local (or already-staged) dir onto a runtime dir.
+type dirMap struct{ Local, Remote string }
+
+// mountSpec mounts an HF bucket at a runtime dir (via hf-mount).
+type mountSpec struct{ Bucket, Remote string }
+
+// job is one `run` invocation.
+type job struct {
+	Session    string
+	ID         string
+	Dirs       []dirMap
+	Mounts     []mountSpec
+	Command    []string
+	Timeout    time.Duration
+	Persistent bool
+	Reuse      bool
+	// Staged means Dirs[].Local are already copied into this job's stage
+	// dir (done by `server run`), so staging is skipped.
+	Staged bool
+}
+
+// runRoot is where stage dirs and logs live: ~/mycolab/run on whichever
+// machine orchestrates the job.
+func runRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", fmt.Errorf("unable to determine user home directory: %w", err)
+	}
+	return filepath.Join(home, "mycolab", "run"), nil
+}
+
+func (j *job) stageDir(root string) string { return filepath.Join(root, j.Session, j.ID) }
+func (j *job) logPath(root string) string  { return filepath.Join(root, j.Session, j.ID+".log") }
+
+func newRunID() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// parseDirMap parses "local_dir:colab_dir". The colab dir must be absolute.
+func parseDirMap(s string) (dirMap, error) {
+	i := strings.LastIndex(s, ":")
+	if i <= 0 || i == len(s)-1 {
+		return dirMap{}, fmt.Errorf("invalid --dir %q (want local_dir:colab_dir)", s)
+	}
+	local, remote := s[:i], s[i+1:]
+	if !strings.HasPrefix(remote, "/") {
+		return dirMap{}, fmt.Errorf("invalid --dir %q: colab dir %q must be an absolute path", s, remote)
+	}
+	abs, err := filepath.Abs(local)
+	if err != nil {
+		return dirMap{}, err
+	}
+	return dirMap{Local: abs, Remote: strings.TrimRight(remote, "/")}, nil
+}
+
+// parseMount parses "hf_bucket:colab_dir" (bucket is user/name[/subpath]).
+func parseMount(s string) (mountSpec, error) {
+	i := strings.LastIndex(s, ":")
+	if i <= 0 || i == len(s)-1 {
+		return mountSpec{}, fmt.Errorf("invalid -v %q (want hf_bucket:colab_dir)", s)
+	}
+	bucket, remote := s[:i], s[i+1:]
+	bucket = strings.TrimPrefix(bucket, "hf://buckets/")
+	bucket = strings.TrimPrefix(bucket, "hf://")
+	if !strings.Contains(bucket, "/") || strings.ContainsAny(bucket, " \t\r\n'\"\\$`;&|<>()") {
+		return mountSpec{}, fmt.Errorf("invalid -v %q: bucket must look like user/name", s)
+	}
+	if !strings.HasPrefix(remote, "/") {
+		return mountSpec{}, fmt.Errorf("invalid -v %q: colab dir %q must be an absolute path", s, remote)
+	}
+	return mountSpec{Bucket: bucket, Remote: strings.TrimRight(remote, "/")}, nil
+}
+
+// rsyncIgnoreFilters returns the rsync filter args for a source directory,
+// respecting .gitignore if present.
+func rsyncIgnoreFilters(dir string) []string {
+	gitignore := filepath.Join(dir, ".gitignore")
+	if st, err := os.Stat(gitignore); err == nil && !st.IsDir() {
+		return []string{"--filter=:- .gitignore"}
+	}
+	return nil
+}
+
+// remoteScript is what runs on the runtime: cd into the first --dir, then
+// the command. A single argument is treated as a shell string (so
+// `-- "python a.py | tee out"` works); several are quoted argv words.
+func (j *job) remoteScript() string {
+	var body string
+	if len(j.Command) == 1 {
+		body = j.Command[0]
+	} else {
+		q := make([]string, len(j.Command))
+		for i, a := range j.Command {
+			q[i] = shellQuote(a)
+		}
+		body = strings.Join(q, " ")
+	}
+	if len(j.Dirs) > 0 {
+		return "cd " + shellQuote(j.Dirs[0].Remote) + " && " + body
+	}
+	return body
+}
+
+// mountScript mounts a bucket on the runtime. HF_TOKEN reaches ssh sessions
+// via `mycolab env HF_TOKEN <token>`.
+func (m mountSpec) mountScript() string {
+	return fmt.Sprintf(`mkdir -p %s && hf-mount start ${HF_TOKEN:+--hf-token "$HF_TOKEN"} bucket %s %s`,
+		shellQuote(m.Remote), m.Bucket, shellQuote(m.Remote))
+}
+
+func bindRunFlags(c *cobra.Command) {
+	c.Flags().StringArray("dir", nil, "local_dir:colab_dir to copy to the runtime (repeatable; the first is the working dir)")
+	c.Flags().StringArrayP("volume", "v", nil, "hf_bucket:colab_dir to mount on the runtime with hf-mount (repeatable)")
+	c.Flags().Duration("timeout", 0, "stop the session (colab stop) if the command runs longer than this (e.g. 2h)")
+	c.Flags().Bool("no-daemon", false, "run in the foreground and stream the log to this terminal")
+	c.Flags().Bool("persistent", false, "keep the staged copy of the dirs after the run")
+	c.Flags().Bool("reuse", false, "use the existing session instead of creating a new one")
+	c.Flags().String("id", "", "run id (internal)")
+	c.Flags().Bool("staged", false, "dirs are already staged (internal)")
+	c.Flags().Bool("detached", false, "log to file only (internal)")
+	for _, f := range []string{"id", "staged", "detached"} {
+		_ = c.Flags().MarkHidden(f)
+	}
+}
+
+// jobFromFlags builds a job from run flags and the args after `--`.
+func jobFromFlags(cmd *cobra.Command, args []string) (*job, error) {
+	session, err := requireSession(cmd)
+	if err != nil {
+		return nil, err
+	}
+	dash := cmd.ArgsLenAtDash()
+	if dash != 0 || len(args) == 0 {
+		return nil, fmt.Errorf("missing command: put it after `--`, e.g. `mycolab %s -s %s --dir .:/content/proj -- python train.py`", cmd.Name(), session)
+	}
+	j := &job{Session: session, Command: args}
+	dirs, _ := cmd.Flags().GetStringArray("dir")
+	for _, d := range dirs {
+		m, err := parseDirMap(d)
+		if err != nil {
+			return nil, err
+		}
+		j.Dirs = append(j.Dirs, m)
+	}
+	vols, _ := cmd.Flags().GetStringArray("volume")
+	for _, v := range vols {
+		m, err := parseMount(v)
+		if err != nil {
+			return nil, err
+		}
+		j.Mounts = append(j.Mounts, m)
+	}
+	j.Timeout, _ = cmd.Flags().GetDuration("timeout")
+	if j.Timeout < 0 {
+		return nil, fmt.Errorf("--timeout must be positive")
+	}
+	j.Persistent, _ = cmd.Flags().GetBool("persistent")
+	j.Reuse, _ = cmd.Flags().GetBool("reuse")
+	j.Staged, _ = cmd.Flags().GetBool("staged")
+	j.ID, _ = cmd.Flags().GetString("id")
+	if j.ID == "" {
+		if j.ID, err = newRunID(); err != nil {
+			return nil, err
+		}
+	}
+	return j, nil
+}
+
+var runCmd = &cobra.Command{
+	Use:   "run [flags] -- <command>",
+	Short: "Create a session, copy dirs, and run a command on it (local orchestration)",
+	Long: `Create a Colab session, mount HF buckets, copy local dirs to it and
+run a command, capturing the log:
+
+    mycolab run -s trainer --gpu L4 --dir ./proj:/content/proj \
+        -v myuser/data:/content/data -- python train.py
+
+The dirs are first copied to ~/mycolab/run/<session>/<id>/, rsynced to the
+runtime, and that copy is removed afterwards unless --persistent. The log
+goes to ~/mycolab/run/<session>/<id>.log. By default the job is detached
+(it prints the id and log path); --no-daemon streams the log here instead.
+--timeout stops the session if the command overruns. Accelerator flags
+mirror 'colab new'. Buckets need hf and hf-mount on the runtime (installed
+by 'mycolab new'; set HF_TOKEN with 'mycolab env HF_TOKEN <token>').
+'mycolab server run' does the same with everything running on the server.`,
+	Args: cobra.ArbitraryArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		j, err := jobFromFlags(cmd, args)
+		if err != nil {
+			return err
+		}
+		if _, err := requireActiveProfile(); err != nil {
+			return err
+		}
+		root, err := runRoot()
+		if err != nil {
+			return err
+		}
+		noDaemon, _ := cmd.Flags().GetBool("no-daemon")
+		detached, _ := cmd.Flags().GetBool("detached")
+		if !noDaemon && !detached {
+			return spawnDetached(j, root)
+		}
+		return execJob(cmd, j, root, detached)
+	},
+}
+
+func init() {
+	bindAcceleratorFlags(runCmd)
+	bindSSHSetupFlags(runCmd)
+	bindRunFlags(runCmd)
+	rootCmd.AddCommand(runCmd)
+}
+
+// spawnDetached re-executes this command as a detached child that logs to
+// the job's log file, then returns immediately.
+func spawnDetached(j *job, root string) error {
+	if err := os.MkdirAll(filepath.Dir(j.logPath(root)), 0o755); err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	args := append([]string{}, os.Args[1:]...)
+	extra := []string{"--detached", "--id", j.ID}
+	for i, a := range args {
+		if a == "--" {
+			args = append(append(append([]string{}, args[:i]...), extra...), args[i:]...)
+			extra = nil
+			break
+		}
+	}
+	args = append(args, extra...)
+	c := exec.Command(exe, args...)
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := c.Start(); err != nil {
+		return err
+	}
+	_ = c.Process.Release()
+	fmt.Printf("Run %s started (session %s).\nLog: %s\nFollow: tail -f %s\n", j.ID, j.Session, j.logPath(root), j.logPath(root))
+	return nil
+}
+
+// execJob runs the pipeline in the foreground. detached sends all output to
+// the log file only; otherwise it is also streamed to the terminal.
+func execJob(cmd *cobra.Command, j *job, root string, detached bool) error {
+	if err := os.MkdirAll(filepath.Dir(j.logPath(root)), 0o755); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(j.logPath(root), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	var out io.Writer = logFile
+	if detached {
+		os.Stdout, os.Stderr = logFile, logFile
+	} else {
+		out = io.MultiWriter(os.Stdout, logFile)
+		fmt.Fprintf(os.Stdout, "Run %s (session %s), log: %s\n", j.ID, j.Session, j.logPath(root))
+	}
+	logf := func(format string, a ...any) {
+		fmt.Fprintf(out, "[mycolab run %s] %s\n", j.ID, fmt.Sprintf(format, a...))
+	}
+	stage := j.stageDir(root)
+	if !j.Persistent {
+		defer func() {
+			_ = os.RemoveAll(stage)
+			logf("cleaned %s", stage)
+		}()
+	}
+
+	err = runPipeline(cmd, j, stage, out, logf)
+	if err != nil {
+		logf("failed: %v", err)
+	} else {
+		logf("done")
+	}
+	return err
+}
+
+func runPipeline(cmd *cobra.Command, j *job, stage string, out io.Writer, logf func(string, ...any)) error {
+	colabBin, err := exec.LookPath("colab")
+	if err != nil {
+		return fmt.Errorf("colab binary not found in PATH")
+	}
+	if !j.Reuse {
+		logf("creating session %s", j.Session)
+		if err := runLogged(context.Background(), out, colabBin, colabNewArgs(cmd, j.Session)...); err != nil {
+			return err
+		}
+		dropMaster(j.Session)
+		if err := runSSHSetup(cmd, j.Session); err != nil {
+			return err
+		}
+	}
+	for _, m := range j.Mounts {
+		logf("mounting hf bucket %s at %s", m.Bucket, m.Remote)
+		if err := runLogged(context.Background(), out, "ssh", j.Session, m.mountScript()); err != nil {
+			return fmt.Errorf("mount %s: %w", m.Bucket, err)
+		}
+	}
+	rsyncBin, err := exec.LookPath("rsync")
+	if err != nil && len(j.Dirs) > 0 {
+		return fmt.Errorf("rsync not found in PATH")
+	}
+	for i, d := range j.Dirs {
+		src := d.Local
+		if !j.Staged {
+			src = filepath.Join(stage, fmt.Sprint(i))
+			if err := os.MkdirAll(src, 0o755); err != nil {
+				return err
+			}
+			logf("staging %s", d.Local)
+			stageArgs := append([]string{"-a"}, rsyncIgnoreFilters(d.Local)...)
+			stageArgs = append(stageArgs, strings.TrimRight(d.Local, "/")+"/", src+"/")
+			if err := runLogged(context.Background(), out, rsyncBin, stageArgs...); err != nil {
+				return fmt.Errorf("stage %s: %w", d.Local, err)
+			}
+		}
+		logf("copying %s -> %s:%s", src, j.Session, d.Remote)
+		if err := runLogged(context.Background(), out, rsyncBin, "-az", "-e", "ssh",
+			"--rsync-path", "mkdir -p "+shellQuote(d.Remote)+" && rsync",
+			strings.TrimRight(src, "/")+"/", j.Session+":"+d.Remote+"/"); err != nil {
+			return fmt.Errorf("copy %s: %w", d.Local, err)
+		}
+	}
+
+	ctx := context.Background()
+	if j.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, j.Timeout)
+		defer cancel()
+	}
+	logf("running: %s", j.remoteScript())
+	err = runLogged(ctx, out, "ssh", j.Session, j.remoteScript())
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		logf("timeout after %s; stopping session %s", j.Timeout, j.Session)
+		if serr := runLogged(context.Background(), out, colabBin, "stop", "-s", j.Session); serr != nil {
+			logf("colab stop failed: %v", serr)
+		}
+		dropMaster(j.Session)
+		return fmt.Errorf("timed out after %s (session stopped)", j.Timeout)
+	}
+	if err != nil {
+		return fmt.Errorf("command failed: %w", err)
+	}
+	return nil
+}
+
+// runLogged runs bin with stdout/stderr going to out.
+func runLogged(ctx context.Context, out io.Writer, bin string, args ...string) error {
+	c := exec.CommandContext(ctx, bin, args...)
+	c.Stdout = out
+	c.Stderr = out
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("%s %s: %w", filepath.Base(bin), strings.Join(args, " "), err)
+	}
+	return nil
+}
