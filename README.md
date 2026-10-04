@@ -5,7 +5,7 @@ Go + Cobra, modeled on the `ref/agys` project structure.
 
 ## Install
 
-One-liner (automatically installs `uv`, `colab-cli`, `lsyncd`, `nfs`, and `mycolab`):
+One-liner (automatically installs `uv`, `colab-cli`, `lsyncd`, `rsync`, and `mycolab`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/carlesoctav/mycolab/main/install.sh | bash

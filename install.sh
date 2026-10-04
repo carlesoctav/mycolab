@@ -7,7 +7,7 @@
 # Env overrides:
 #   MYCOLAB_VERSION   release tag to install ("latest" by default)
 #   INSTALL_DIR       where to put the binary (~/.local/bin by default)
-#   INSTALL_DEPS      install dependencies (uv, colab-cli, lsyncd, nfs, rsync) (default: 1; set 0 to skip)
+#   INSTALL_DEPS      install dependencies (uv, colab-cli, lsyncd, rsync) (default: 1; set 0 to skip)
 #   GITHUB_TOKEN      optional token to avoid GitHub API rate limits
 set -euo pipefail
 
@@ -82,45 +82,38 @@ mkdir -p "$INSTALL_DIR"
 install -m 755 "$TMP/mycolab" "$INSTALL_DIR/mycolab"
 
 install_deps() {
-	echo "Checking and installing dependencies (uv, colab-cli, lsyncd, rsync, nfs)..."
+	echo "Checking and installing dependencies (uv, colab-cli, lsyncd, rsync)..."
 	local sudo_cmd=""
 	if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
 		sudo_cmd="sudo"
 	fi
 
-	# 1. Distro-independent system packages (lsyncd, rsync, nfs client)
+	# 1. Distro-independent system packages (lsyncd, rsync)
 	if command -v dnf >/dev/null 2>&1; then
-		echo "Detected dnf (Fedora/RHEL/CentOS) — checking system packages..."
 		local pkgs=()
 		command -v lsyncd >/dev/null 2>&1 || pkgs+=(lsyncd)
 		command -v rsync >/dev/null 2>&1 || pkgs+=(rsync)
-		[ -x /sbin/mount.nfs ] || pkgs+=(nfs-utils)
 		if [ "${#pkgs[@]}" -gt 0 ]; then
 			echo "Installing system packages with dnf: ${pkgs[*]} ..."
-			$sudo_cmd dnf install -y "${pkgs[@]}" || echo "Warning: failed to install some packages with dnf; you can install them manually: ${pkgs[*]}" >&2
+			$sudo_cmd dnf install -y "${pkgs[@]}" || echo "Warning: failed to install with dnf: ${pkgs[*]}" >&2
 		fi
 	elif command -v apt-get >/dev/null 2>&1; then
-		echo "Detected apt (Debian/Ubuntu) — checking system packages..."
 		local pkgs=()
 		command -v lsyncd >/dev/null 2>&1 || pkgs+=(lsyncd)
 		command -v rsync >/dev/null 2>&1 || pkgs+=(rsync)
-		[ -x /sbin/mount.nfs ] || pkgs+=(nfs-common)
 		if [ "${#pkgs[@]}" -gt 0 ]; then
 			echo "Installing system packages with apt-get: ${pkgs[*]} ..."
 			$sudo_cmd apt-get update -qq || true
-			$sudo_cmd DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}" || echo "Warning: failed to install some packages with apt; you can install them manually: ${pkgs[*]}" >&2
+			$sudo_cmd DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}" || echo "Warning: failed to install with apt: ${pkgs[*]}" >&2
 		fi
 	elif command -v pacman >/dev/null 2>&1; then
-		echo "Detected pacman (Arch Linux) — checking system packages..."
 		local pkgs=()
 		command -v lsyncd >/dev/null 2>&1 || pkgs+=(lsyncd)
 		command -v rsync >/dev/null 2>&1 || pkgs+=(rsync)
-		[ -x /sbin/mount.nfs ] || pkgs+=(nfs-utils)
 		if [ "${#pkgs[@]}" -gt 0 ]; then
-			$sudo_cmd pacman -S --noconfirm "${pkgs[@]}" || echo "Warning: failed to install some packages with pacman: ${pkgs[*]}" >&2
+			$sudo_cmd pacman -S --noconfirm "${pkgs[@]}" || echo "Warning: failed to install with pacman: ${pkgs[*]}" >&2
 		fi
 	elif command -v brew >/dev/null 2>&1; then
-		echo "Detected Homebrew (macOS) — checking packages..."
 		command -v lsyncd >/dev/null 2>&1 || brew install lsyncd || true
 		command -v rsync >/dev/null 2>&1 || brew install rsync || true
 	fi
