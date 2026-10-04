@@ -287,14 +287,13 @@ run a command, capturing the log:
     mycolab run -s trainer --gpu L4 --dir ./proj:/content/proj \
         -v myuser/data:/content/data -- python train.py
 
-The dirs are first copied to ~/mycolab/run/<session>/<id>/, rsynced to the
-runtime, and that copy is removed afterwards unless --persistent. The log
-goes to ~/mycolab/run/<session>/<id>.log. By default the job is detached
+The dirs are rsynced directly to the runtime respecting .gitignore patterns.
+The log goes to ~/mycolab/run/<session>/<id>.log. By default the job is detached
 (it prints the id and log path); --no-daemon streams the log here instead.
 --timeout stops the session if the command overruns. Accelerator flags
 mirror 'colab new'. Buckets need hf and hf-mount on the runtime (installed
 by 'mycolab new'; set HF_TOKEN with 'mycolab env HF_TOKEN <token>').
-'mycolab server run' does the same with everything running on the server.`,
+'mycolab server run' stages dirs on the server and runs everything there.`,
 	Args: cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		j, err := jobFromFlags(cmd, args)
@@ -378,12 +377,14 @@ func execJob(cmd *cobra.Command, j *job, root string, detached bool) error {
 	stage := j.stageDir(root)
 	if !j.Persistent {
 		defer func() {
-			_ = os.RemoveAll(stage)
-			logf("cleaned %s", stage)
+			if _, err := os.Stat(stage); err == nil {
+				_ = os.RemoveAll(stage)
+				logf("cleaned %s", stage)
+			}
 		}()
 	}
 
-	err = runPipeline(cmd, j, stage, out, logf)
+	err = runPipeline(cmd, j, out, logf)
 	if err != nil {
 		logf("failed: %v", err)
 	} else {
@@ -392,7 +393,7 @@ func execJob(cmd *cobra.Command, j *job, root string, detached bool) error {
 	return err
 }
 
-func runPipeline(cmd *cobra.Command, j *job, stage string, out io.Writer, logf func(string, ...any)) error {
+func runPipeline(cmd *cobra.Command, j *job, out io.Writer, logf func(string, ...any)) error {
 	colabBin, err := exec.LookPath("colab")
 	if err != nil {
 		return fmt.Errorf("colab binary not found in PATH")
@@ -417,24 +418,13 @@ func runPipeline(cmd *cobra.Command, j *job, stage string, out io.Writer, logf f
 	if err != nil && len(j.Dirs) > 0 {
 		return fmt.Errorf("rsync not found in PATH")
 	}
-	for i, d := range j.Dirs {
-		src := d.Local
-		if !j.Staged {
-			src = filepath.Join(stage, fmt.Sprint(i))
-			if err := os.MkdirAll(src, 0o755); err != nil {
-				return err
-			}
-			logf("staging %s", d.Local)
-			stageArgs := append([]string{"-a"}, rsyncIgnoreFilters(d.Local)...)
-			stageArgs = append(stageArgs, strings.TrimRight(d.Local, "/")+"/", src+"/")
-			if err := runLogged(context.Background(), out, rsyncBin, stageArgs...); err != nil {
-				return fmt.Errorf("stage %s: %w", d.Local, err)
-			}
-		}
-		logf("copying %s -> %s:%s", src, j.Session, d.Remote)
-		if err := runLogged(context.Background(), out, rsyncBin, "-az", "-e", "ssh",
+	for _, d := range j.Dirs {
+		logf("copying %s -> %s:%s", d.Local, j.Session, d.Remote)
+		args := append([]string{"-az"}, rsyncIgnoreFilters(d.Local)...)
+		args = append(args, "-e", "ssh",
 			"--rsync-path", "mkdir -p "+shellQuote(d.Remote)+" && rsync",
-			strings.TrimRight(src, "/")+"/", j.Session+":"+d.Remote+"/"); err != nil {
+			strings.TrimRight(d.Local, "/")+"/", j.Session+":"+d.Remote+"/")
+		if err := runLogged(context.Background(), out, rsyncBin, args...); err != nil {
 			return fmt.Errorf("copy %s: %w", d.Local, err)
 		}
 	}
