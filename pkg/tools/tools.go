@@ -21,14 +21,17 @@ type Spec struct {
 	// link the binary into /usr/local/bin when the installer lands it
 	// outside PATH. Empty means nothing extra.
 	PostInstall string
-	// ConfigDir mirrors local ~/.config/<dir> to /root/.config/<dir>.
+	// ConfigBase is the home-relative parent of ConfigDir; empty means
+	// ".config".
+	ConfigBase string
+	// ConfigDir mirrors local ~/<ConfigBase>/<dir> to /root/<ConfigBase>/<dir>.
 	ConfigDir string
 	// ConfigFiles are copied when present locally; missing ones are skipped.
 	ConfigFiles []string
 }
 
 // registry lists every supported tool.
-var registry = []Spec{Muse}
+var registry = []Spec{Muse, Agy}
 
 // Lookup returns the spec for name (case-insensitive), or an error
 // listing the supported tool names.
@@ -46,6 +49,14 @@ func Lookup(name string) (Spec, error) {
 	return Spec{}, fmt.Errorf("unknown tool %q (supported: %s)", name, strings.Join(names, ", "))
 }
 
+// ConfigRoot returns the home-relative config base (default ".config").
+func (s Spec) ConfigRoot() string {
+	if s.ConfigBase == "" {
+		return ".config"
+	}
+	return s.ConfigBase
+}
+
 // InstallStdin builds the `colab exec` stdin that installs the tool: a
 // no-op when CheckBinary is already on the remote PATH, otherwise
 // InstallCmd plus PostInstall, with a final PATH check gating the marker.
@@ -53,7 +64,7 @@ func (s Spec) InstallStdin(marker string) string {
 	var sb strings.Builder
 	sb.WriteString("!")
 	if s.ConfigDir != "" {
-		sb.WriteString("mkdir -p /root/.config/" + s.ConfigDir + " && ")
+		sb.WriteString("mkdir -p /root/" + s.ConfigRoot() + "/" + s.ConfigDir + " && ")
 	}
 	sb.WriteString("(command -v " + s.CheckBinary + " || (" + s.InstallCmd)
 	if s.PostInstall != "" {

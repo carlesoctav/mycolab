@@ -20,8 +20,8 @@ Each profile keeps its own session list and login token under
 colab-cli's sessions.json and token.json at the profile's files, so plain
 'colab ...' commands then operate on that workspace.
 
-Session-scoped commands (ssh, lsyncd, install, tool, ping) take the session
-from the '-s/--session' flag, e.g. 'mycolab ssh -s trainer'.`,
+Session-scoped commands (new, stop, tool, lsyncd, ping) take the session
+from the '-s/--session' flag, e.g. 'mycolab new -s trainer --gpu L4'.`,
 }
 
 // requireSession returns the '-s/--session' value, or an error when it is
@@ -62,6 +62,6 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringP("session", "s", "", "colab session to operate on (used by ssh, lsyncd, install, tool, ping)")
+	rootCmd.PersistentFlags().StringP("session", "s", "", "colab session to operate on (used by new, stop, tool, lsyncd, ping)")
 	rootCmd.RegisterFlagCompletionFunc("session", completeSessionFlag)
 }

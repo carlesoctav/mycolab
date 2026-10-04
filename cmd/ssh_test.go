@@ -104,6 +104,55 @@ func TestUpsertSessionHostRemovesLegacyColab(t *testing.T) {
 	}
 }
 
+func TestPruneStaleHostsRemovesDead(t *testing.T) {
+	first, _, _ := upsertSessionHost("", "work", "trainer")
+	content, _, _ := upsertSessionHost(first, "work", "eval")
+	updated, removed := pruneStaleHosts(content, map[string]bool{"trainer": true})
+	if len(removed) != 1 || removed[0] != "eval" {
+		t.Errorf("removed = %q, want [eval]", removed)
+	}
+	if strings.Contains(updated, "Host eval\n") {
+		t.Errorf("stale Host eval not pruned:\n%s", updated)
+	}
+	if !strings.Contains(updated, "Host trainer\n") {
+		t.Errorf("live Host trainer missing after prune:\n%s", updated)
+	}
+}
+
+func TestPruneStaleHostsKeepsAllWhenAlive(t *testing.T) {
+	first, _, _ := upsertSessionHost("", "work", "trainer")
+	content, _, _ := upsertSessionHost(first, "work", "eval")
+	updated, removed := pruneStaleHosts(content, map[string]bool{"trainer": true, "eval": true})
+	if len(removed) != 0 {
+		t.Errorf("removed = %q, want none", removed)
+	}
+	if updated != content {
+		t.Errorf("content changed when nothing to prune:\n%s", updated)
+	}
+}
+
+func TestPruneStaleHostsPreservesForeign(t *testing.T) {
+	content, _, _ := upsertSessionHost("", "work", "trainer")
+	content += "Host myserver\n    HostName example.com\n"
+	updated, removed := pruneStaleHosts(content, map[string]bool{"trainer": true})
+	if len(removed) != 0 {
+		t.Errorf("removed = %q, want none", removed)
+	}
+	if !strings.Contains(updated, "Host myserver\n") {
+		t.Errorf("foreign Host myserver not preserved:\n%s", updated)
+	}
+}
+
+func TestPruneStaleHostsEmpty(t *testing.T) {
+	updated, removed := pruneStaleHosts("", map[string]bool{"trainer": true})
+	if len(removed) != 0 {
+		t.Errorf("removed = %q, want none", removed)
+	}
+	if updated != "" {
+		t.Errorf("updated = %q, want empty", updated)
+	}
+}
+
 func TestValidateSessionHost(t *testing.T) {
 	for _, ok := range []string{"trainer", "train-1", "eval_x", "a.b", "colab"} {
 		if err := validateSessionHost(ok); err != nil {

@@ -35,14 +35,16 @@ mycolab add personal
 mycolab list              # * marks the active profile
 mycolab use               # interactive picker (j/k or arrows, Enter)
 mycolab use work          # switch directly
-mycolab ssh -s trainer    # write Host trainer -> ~/.ssh/colab_config
-mycolab ssh -s eval       # second session, second Host entry
+mycolab new -s trainer --gpu L4  # create a session, then wire it for ssh
+mycolab new -s eval       # second session, second Host entry
+mycolab stop -s trainer   # stop a session
 ssh trainer               # connect (after the Include step below)
 mycolab lsyncd -s trainer ~/personal/try-agent /content/try-agent  # scaffold live-sync files
-mycolab pull              # one-shot remote -> local over the lsyncd mapping
-mycolab sync              # run lsyncd live sync in the foreground
-mycolab install -s trainer ruff  # uv tool install on the runtime
+mycolab pull trainer.conf.lua  # one-shot remote -> local over the lsyncd mapping
+mycolab sync trainer.conf.lua  # run lsyncd live sync in the foreground
 mycolab tool -s trainer muse   # install tool + credentials on the runtime
+mycolab server connect free    # select the always-on server (ssh host)
+mycolab server new -s trainer --gpu L4  # create on the server + wire locally
 mycolab usage             # remaining compute-unit credits per profile
 mycolab usage work        # just one account (--json for scripts)
 ```
@@ -55,19 +57,23 @@ Profiles live under `~/.config/mycolab`:
 | --- | --- |
 | `<name>.json` | session list (colab `sessions.json` format, starts as `{}`) |
 | `<name>.token.json` | oauth2 login token (empty until first login) |
+| `server` | selected always-on ssh host (set by `server connect`) |
 
 `mycolab use <name>` activates a profile by symlinking colab-cli's own
 `sessions.json` and `token.json` at the profile's files, so plain
 `colab ...` commands operate on that workspace/account with no extra flags.
 Pre-existing real files are moved aside to `*.bak` (numbered if taken).
 
-`mycolab ssh -s <session>` writes a `Host <session>` block (ProxyCommand
-over `colab ssh --proxy-mode`) into a separate `~/.ssh/colab_config`,
-following the active profile. Each session gets its own hostname, so
-several sessions stay usable side by side; re-running for a session
-updates its entry in place and leaves the others alone. (A legacy
-single-host `Host colab` entry from older mycolab versions is removed on
-the next run.) Your main `~/.ssh/config` needs one line to pick it up:
+`mycolab new -s <session> ...` creates the session and writes a
+`Host <session>` block (ProxyCommand over `colab ssh --proxy-mode`)
+into a separate `~/.ssh/colab_config`, following the active profile.
+Each session gets its own hostname, so several sessions stay usable
+side by side; the entry is updated in place. Managed entries whose
+session exists in no profile are pruned as inactive (`--no-prune` skips
+this); foreign entries are always left alone. (A legacy single-host
+`Host colab` entry from older mycolab versions is removed on the next
+run.) Note: `new` with an existing name replaces the runtime. Your main
+`~/.ssh/config` needs one line to pick it up:
 
 ```
 Include ~/.ssh/colab_config
@@ -84,11 +90,10 @@ Colab allows a single concurrent proxy connection per runtime, so each
 managed entry enables multiplexing (`ControlMaster auto`,
 `ControlPersist 10m`): the first connection becomes the master and later
 ones (shells, rsync, lsyncd) share it as extra channels instead of
-tripping HTTP 429 against each other. After `colab new`, drop the stale
-master once with `ssh -O exit <session>` (re-running `mycolab ssh` after a
-profile switch closes it for you).
+tripping HTTP 429 against each other. `new` drops the stale master for
+a replaced runtime; `ssh -O exit <session>` also works by hand.
 
-`mycolab ssh -s <session>` also pushes the bundled `cmd/tmux.conf` to
+`new` also pushes the bundled `cmd/tmux.conf` to
 `/root/.tmux.conf` on the runtime (best-effort; `--no-tmux-sync` skips
 it), so tmux on the server matches your local setup. Edit the bundled
 copy and reinstall to change it.
@@ -120,33 +125,28 @@ already present.
 sync (local checkout → remote path) into any project dir:
 
 ```bash
-mycolab lsyncd -s trainer ~/personal/try-agent /content/try-agent
-cd ~/personal/try-agent && mycolab sync  # foreground; Ctrl+C stops it
+mycolab lsyncd -s trainer ~/personal/try-agent /content/try-agent  # writes trainer.conf.lua
+mycolab lsyncd -s eval ~/personal/try-agent /content/try-agent     # writes eval.conf.lua
+cd ~/personal/try-agent && mycolab sync trainer.conf.lua  # foreground; Ctrl+C stops it
 ```
 
-It writes `lsyncd.conf.lua` (one-way sync over the session's host,
-ignoring `.git/`/`.venv/`, never deleting remote-only outputs) and
-`LSYNCD.md` (agent/human doc: develop locally, run on the remote, session
-lifecycle). Flags: `--host` (default: the `-s` session), `--force` to
-overwrite. After `colab new` + `mycolab ssh -s <session>`, restart the
-daemon so its startup full-sync repopulates the fresh VM.
+It writes `<session>.conf.lua` (one-way sync over the session's host,
+ignoring `.git/`/`.venv/`, never deleting remote-only outputs) and the
+shared `LSYNCD.md` (agent/human doc: develop locally, run on the remote,
+session lifecycle). One checkout can hold several session configs side by
+side; each daemon gets its own log/pid files under `/tmp`. Flags: `--host`
+(default: the `-s` session), `--force` to overwrite. After `mycolab new
+-s <session>`, restart the daemon so its startup full-sync repopulates
+the fresh VM.
 
-`mycolab pull` (run from the project dir) reads back that same
-`lsyncd.conf.lua` and runs the reverse direction as a one-shot rsync:
+`mycolab pull <conf>` / `mycolab sync <conf>` (run from the project dir)
+take the config file (`trainer.conf.lua`) or the bare session name
+(`trainer`). With no argument, `./lsyncd.conf.lua` wins when present
+(written by older mycolab), else the single `*.conf.lua` in the directory;
+when several exist, the argument is required. `pull` reads back the
+config's mapping and runs the reverse direction as a one-shot rsync:
 remote → local. Local-only files are left alone (no `--delete`); add
 `-n/--dry-run` to preview the transfer.
-
-## Install tools on a runtime
-
-`mycolab install -s <session> <package> [...]` runs `uv tool install`
-for each package on the runtime via `colab exec`:
-
-```bash
-mycolab install -s trainer ruff
-```
-
-Unlike the best-effort `mycolab ssh` push steps, a failure here fails the
-command. uv must already exist on the runtime.
 
 ## Tools on a runtime
 
@@ -158,8 +158,39 @@ mycolab tool -s trainer muse
 ```
 
 Supported tools: `muse` (upstream installer, then
-`~/.config/muse/{auth,settings,trust}.json` → `/root/.config/muse/`).
+`~/.config/muse/{auth,settings,trust}.json` → `/root/.config/muse/`),
+`agy` (Antigravity CLI: upstream installer, then
+`~/.gemini/antigravity-cli/antigravity-oauth-token` → `/root/.gemini/antigravity-cli/`).
 Each tool is one spec file under `pkg/tools/`; failures fail the command.
+
+## Server (always-on)
+
+`mycolab server connect` selects an always-on machine (e.g. a free-tier
+micro VM) over SSH, and `mycolab server new` creates the session there
+instead of here. Profiles are tracked locally only: the command pushes
+the active profile's token to a same-named mirror profile on the
+server, runs `colab new` plus the runtime prep there, then pulls merged
+sessions back and writes the direct local entry. Switching accounts is
+just `mycolab use <profile>` — the next server command pushes that
+account. Everything after creation (`stop`, `tool`, `usage`, plain
+`ssh`) runs locally on the synced state:
+
+```bash
+mycolab server connect free    # select the server: an ssh host from ~/.ssh/config
+mycolab server new -s trainer --gpu L4  # create on the server + wire locally
+```
+
+The server needs the `mycolab` and `colab` binaries installed
+(`~/.local/bin` and `~/go/bin` are added to PATH automatically). The
+connected host is stored in `~/.config/mycolab/server`; `--server
+<ssh-host>` overrides it for one invocation.
+
+Sync rules: sessions are never pushed — the server file is written by
+server-side runs and merged back by name (server wins; local-only
+sessions are preserved). The machine-local `keep_alive_pid` is stripped
+from incoming entries. When a merged entry points at a different runtime
+than the local one, the previous local file is backed up to
+`<profile>.json.mycolab-sync.bak`.
 
 ## Notes
 

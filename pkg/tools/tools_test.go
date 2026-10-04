@@ -69,3 +69,19 @@ func TestInstallStdin(t *testing.T) {
 		t.Errorf("bare spec stdin malformed:\n%s", bare)
 	}
 }
+
+func TestAgySpec(t *testing.T) {
+	if _, err := Lookup("agy"); err != nil {
+		t.Fatal(err)
+	}
+	stdin := Agy.InstallStdin("M")
+	for _, want := range []string{
+		"mkdir -p /root/.gemini/antigravity-cli",
+		"curl -fsSL --compressed https://antigravity.google/cli/install.sh | bash",
+		"ln -sf /root/.local/bin/agy /usr/local/bin/agy",
+	} {
+		if !strings.Contains(stdin, want) {
+			t.Errorf("stdin missing %q: %s", want, stdin)
+		}
+	}
+}

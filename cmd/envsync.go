@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/carlesoctav/mycolab/pkg/profile"
 	"github.com/carlesoctav/mycolab/pkg/sshenv"
 )
 
@@ -21,7 +22,7 @@ const (
 	colabExecRetryDelay = 3 * time.Second
 	// colabCallTimeout bounds every colab subprocess call: the kernel
 	// client has hung indefinitely before, and a stuck push step must
-	// never wedge `mycolab ssh` forever.
+	// never wedge `mycolab new` forever.
 	colabCallTimeout = 120 * time.Second
 	// colabRemoteTimeout bounds execution on the runtime itself; passed
 	// through to `colab exec` (which defaults to 30s).
@@ -107,18 +108,14 @@ func captureKernelEnv(colabBin, session string) (map[string]string, error) {
 	return nil, err
 }
 
-func init() {
-	sshCmd.Flags().Bool("no-env-sync", false, "skip syncing the runtime kernel env into sshd for ssh sessions")
-}
-
 // syncRuntimeEnv captures the session runtime's kernel environment (via the
 // exec door, which carries the full container env) and installs it as a
 // managed sshd SetEnv block, so `ssh` sessions see the same accelerators
 // and tools as `colab console` / `colab exec`. Best-effort by design:
-// failures warn, never fail `mycolab ssh`.
+// failures warn, never fail `mycolab new`.
 func syncRuntimeEnv(session string, sessionKnown bool) {
 	if !sessionKnown {
-		fmt.Printf("Note: session %q does not exist yet; skipping env sync (re-run `mycolab ssh -s %s` once it does).\n", session, session)
+		fmt.Printf("Note: session %q does not exist yet; skipping env sync.\n", session)
 		return
 	}
 	colabBin, err := exec.LookPath("colab")
@@ -136,6 +133,17 @@ func syncRuntimeEnv(session string, sessionKnown bool) {
 		if !sshenv.Denied(k) {
 			kept[k] = v
 		}
+	}
+	custom, err := profile.CustomEnv()
+	if err != nil {
+		fmt.Printf("Note: could not read custom env (%v).\n", err)
+		custom = nil
+	}
+	if len(custom) > 0 {
+		for k, v := range custom {
+			kept[k] = v
+		}
+		fmt.Printf("sync %d custom env: %s\n", len(custom), strings.Join(profile.CustomEnvNames(custom), ", "))
 	}
 	directive, skipped := sshenv.RenderSetEnv(kept)
 	if directive == "" {

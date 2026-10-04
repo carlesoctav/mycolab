@@ -5,6 +5,7 @@ package sshconfig
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -85,6 +86,97 @@ func EnsureGlobalInclude(content, includeLine, needle string) (string, bool) {
 	copy(kept[at+1:], kept[at:])
 	kept[at] = includeLine
 	return strings.Join(kept, "\n"), true
+}
+
+// HostNames returns the literal host patterns declared by Host directives
+// in content, in order of appearance. Wildcard/negated patterns (those
+// containing *?! ) are skipped: they cannot be selected by exact name.
+func HostNames(content string) []string {
+	var names []string
+	for _, line := range strings.Split(content, "\n") {
+		d, args := directive(line)
+		if d != "host" {
+			continue
+		}
+		for _, pat := range args {
+			if strings.ContainsAny(pat, "*?!") {
+				continue
+			}
+			names = append(names, pat)
+		}
+	}
+	return names
+}
+
+// LoadHostNames returns every literal Host pattern declared by path,
+// following Include directives recursively (cycle-safe). Relative include
+// patterns resolve against the including file's directory. A missing file
+// yields no names and no error.
+func LoadHostNames(path string) ([]string, error) {
+	return loadHostNames(path, map[string]bool{})
+}
+
+func loadHostNames(path string, visited map[string]bool) ([]string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	if visited[abs] {
+		return nil, nil
+	}
+	visited[abs] = true
+	content, err := os.ReadFile(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	names := HostNames(string(content))
+	for _, line := range strings.Split(string(content), "\n") {
+		d, args := directive(line)
+		if d != "include" {
+			continue
+		}
+		for _, pat := range args {
+			expanded := expandIncludePattern(pat, filepath.Dir(abs))
+			if expanded == "" {
+				continue
+			}
+			matches, err := filepath.Glob(expanded)
+			if err != nil {
+				continue
+			}
+			for _, m := range matches {
+				sub, err := loadHostNames(m, visited)
+				if err != nil {
+					return nil, err
+				}
+				names = append(names, sub...)
+			}
+		}
+	}
+	return names, nil
+}
+
+// expandIncludePattern resolves one Include pattern: a leading ~/ expands
+// against the user's home, and relative patterns resolve against dir (the
+// including file's directory). It returns "" when home cannot be determined.
+func expandIncludePattern(pat, dir string) string {
+	if pat == "~" || strings.HasPrefix(pat, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil || home == "" {
+			return ""
+		}
+		if pat == "~" {
+			return home
+		}
+		return filepath.Join(home, strings.TrimPrefix(pat, "~/"))
+	}
+	if !filepath.IsAbs(pat) {
+		return filepath.Join(dir, pat)
+	}
+	return pat
 }
 
 // BackupPath returns path+".mycolab.bak", or a numbered variant when taken,

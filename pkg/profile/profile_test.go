@@ -244,3 +244,25 @@ func TestHasToken(t *testing.T) {
 		t.Fatal("HasToken() after login = false, want true")
 	}
 }
+
+func TestServerSelect(t *testing.T) {
+	tempHome(t)
+	if got, _ := profile.GetServer(); got != "" {
+		t.Fatalf("GetServer() on fresh home = %q, want empty", got)
+	}
+	if err := profile.SetServer(""); err == nil {
+		t.Fatal("SetServer(\"\") = nil, want error")
+	}
+	if err := profile.SetServer("free"); err != nil {
+		t.Fatalf("SetServer(free) = %v", err)
+	}
+	if got, _ := profile.GetServer(); got != "free" {
+		t.Fatalf("GetServer() = %q, want free", got)
+	}
+	if err := profile.SetServer("other"); err != nil {
+		t.Fatalf("SetServer(other) = %v", err)
+	}
+	if got, _ := profile.GetServer(); got != "other" {
+		t.Fatalf("GetServer() after reselect = %q, want other", got)
+	}
+}

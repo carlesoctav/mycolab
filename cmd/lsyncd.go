@@ -13,20 +13,21 @@ import (
 var lsyncdCmd = &cobra.Command{
 	Use:   "lsyncd [source] [target]",
 	Short: "Scaffold lsyncd live-sync files for a local dir -> Colab path",
-	Long: `Write lsyncd.conf.lua and LSYNCD.md into a local project directory.
+	Long: `Write <session>.conf.lua and LSYNCD.md into a local project directory.
 
 SOURCE is the local checkout to watch (relative or absolute); TARGET is the
 absolute remote path it syncs to. Example:
 
-    mycolab lsyncd ~/personal/try-agent /content/try-agent
+    mycolab lsyncd -s trainer ~/personal/try-agent /content/try-agent
 
-The generated lsyncd.conf.lua syncs one-way local -> remote over the given
+The generated <session>.conf.lua syncs one-way local -> remote over the given
 SSH host (the '-s/--session' session by default, whose entry is managed by
-'mycolab ssh -s <session>'; pass --host to override), ignoring .git/ and
-.venv/. LSYNCD.md documents the setup for humans and coding agents:
-develop locally, run/test on the remote.
+'mycolab new -s <session>'; pass --host to override), ignoring .git/ and
+.venv/. Each session gets its own config file, so several sessions can sync
+the same checkout side by side; LSYNCD.md is shared and documents the setup
+for humans and coding agents: develop locally, run/test on the remote.
 
-Existing files are left alone unless --force is given.`,
+An existing config is left alone unless --force is given.`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		hostFlag, _ := cmd.Flags().GetString("host")
@@ -35,20 +36,24 @@ Existing files are left alone unless --force is given.`,
 		if err != nil {
 			return err
 		}
+		name := sessionFlag
+		if name == "" {
+			name = hostFlag
+		}
 		force, _ := cmd.Flags().GetBool("force")
-		return scaffoldLsyncd(args[0], args[1], host, force)
+		return scaffoldLsyncd(args[0], args[1], host, name, force)
 	},
 }
 
 func init() {
 	lsyncdCmd.Flags().String("host", "", "SSH host to sync to (defaults to the -s session)")
-	lsyncdCmd.Flags().BoolP("force", "f", false, "overwrite existing lsyncd.conf.lua / LSYNCD.md")
+	lsyncdCmd.Flags().BoolP("force", "f", false, "overwrite the existing <session>.conf.lua / LSYNCD.md")
 	rootCmd.AddCommand(lsyncdCmd)
 }
 
 // resolveSyncHost picks the SSH host for live sync: an explicit --host
 // wins, otherwise the -s session (whose 'Host <session>' entry 'mycolab
-// ssh -s <session>' manages).
+// new -s <session>' manages).
 func resolveSyncHost(host, session string) (string, error) {
 	if host != "" {
 		return host, nil
@@ -59,10 +64,16 @@ func resolveSyncHost(host, session string) (string, error) {
 	return "", fmt.Errorf("no SSH host selected (pass `--host <host>` or `-s <session>`)")
 }
 
-// scaffoldLsyncd renders the sync config and agent doc into sourceDir.
-func scaffoldLsyncd(source, target, host string, force bool) error {
+// scaffoldLsyncd renders the sync config (<name>.conf.lua) and the shared
+// agent doc (LSYNCD.md) into sourceDir. The per-session config lets several
+// sessions sync the same checkout side by side; the doc is written on the
+// first scaffold and kept as-is afterwards unless --force is given.
+func scaffoldLsyncd(source, target, host, name string, force bool) error {
 	if host == "" {
 		return fmt.Errorf("host must not be empty")
+	}
+	if err := validateConfName(name); err != nil {
+		return err
 	}
 	if !strings.HasPrefix(target, "/") {
 		return fmt.Errorf("target must be an absolute remote path, got %q", target)
@@ -78,34 +89,70 @@ func scaffoldLsyncd(source, target, host string, force bool) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("source %q is not a directory", source)
 	}
+	confFile := name + ".conf.lua"
 	data := struct {
-		Source string
-		Target string
-		Host   string
-		Slug   string
-	}{Source: abs, Target: target, Host: host, Slug: slugify(filepath.Base(abs))}
+		Source   string
+		Target   string
+		Host     string
+		Slug     string
+		Name     string
+		ConfFile string
+	}{Source: abs, Target: target, Host: host, Slug: slugify(filepath.Base(abs)), Name: name, ConfFile: confFile}
 
-	files := map[string]string{
-		"lsyncd.conf.lua": lsyncdConfTemplate,
-		"LSYNCD.md":       lsyncdDocTemplate,
+	confPath := filepath.Join(abs, confFile)
+	if !force {
+		if _, err := os.Stat(confPath); err == nil {
+			return fmt.Errorf("%s already exists (use --force to overwrite)", confPath)
+		}
 	}
-	for name, tmpl := range files {
-		path := filepath.Join(abs, name)
-		if !force {
-			if _, err := os.Stat(path); err == nil {
-				return fmt.Errorf("%s already exists (use --force to overwrite)", path)
-			}
-		}
-		var sb strings.Builder
-		if err := template.Must(template.New(name).Parse(tmpl)).Execute(&sb, data); err != nil {
-			return fmt.Errorf("render %s: %w", name, err)
-		}
-		if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", path, err)
-		}
-		fmt.Printf("Wrote %s\n", path)
+	if err := renderTemplateToFile(confPath, confFile, lsyncdConfTemplate, data); err != nil {
+		return err
 	}
-	fmt.Printf("Start syncing: cd %s && lsyncd lsyncd.conf.lua\n", abs)
+	docPath := filepath.Join(abs, "LSYNCD.md")
+	if !force {
+		if _, err := os.Stat(docPath); err == nil {
+			fmt.Printf("Kept existing %s (use --force to refresh it for %s)\n", docPath, confFile)
+			fmt.Printf("Start syncing: cd %s && mycolab sync %s\n", abs, confFile)
+			return nil
+		}
+	}
+	if err := renderTemplateToFile(docPath, "LSYNCD.md", lsyncdDocTemplate, data); err != nil {
+		return err
+	}
+	fmt.Printf("Start syncing: cd %s && mycolab sync %s\n", abs, confFile)
+	return nil
+}
+
+// renderTemplateToFile renders tmpl with data and writes it to path.
+func renderTemplateToFile(path, tmplName, tmpl string, data any) error {
+	var sb strings.Builder
+	if err := template.Must(template.New(tmplName).Parse(tmpl)).Execute(&sb, data); err != nil {
+		return fmt.Errorf("render %s: %w", tmplName, err)
+	}
+	if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	fmt.Printf("Wrote %s\n", path)
+	return nil
+}
+
+// validateConfName rejects config names that would make a bad
+// '<name>.conf.lua' file: path separators and '.'/'..' escape the project
+// dir, a leading '-' parses as a flag, and whitespace/quotes/globs break
+// the shell, the lua, and the ssh Host line alike.
+func validateConfName(name string) error {
+	if name == "" {
+		return fmt.Errorf("config name must not be empty")
+	}
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid config name %q", name)
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("invalid config name %q: must not start with '-'", name)
+	}
+	if strings.ContainsAny(name, "/\\ \t\r\n#*?!'\"") {
+		return fmt.Errorf("invalid config name %q: must not contain path separators, whitespace, or any of #*?!'\"", name)
+	}
 	return nil
 }
 
@@ -130,24 +177,26 @@ func slugify(base string) string {
 const lsyncdConfTemplate = `-- lsyncd config: live-sync this dir -> {{.Host}}:{{.Target}}.
 -- One-way local -> remote. Local checkout is the source of truth.
 --
--- Start:  mycolab sync   (from {{.Source}}; runs lsyncd lsyncd.conf.lua)
+-- Config: {{.ConfFile}} (one per session; scaffold another with
+--   'mycolab lsyncd -s <other> {{.Source}} {{.Target}}')
+-- Start:  mycolab sync {{.ConfFile}}   (from {{.Source}})
 -- Runs in the foreground: stop it with Ctrl+C.
--- Logs:   tail -f /tmp/lsyncd-{{.Slug}}.log   (from another terminal)
+-- Logs:   tail -f /tmp/lsyncd-{{.Slug}}-{{.Name}}.log   (from another terminal)
 --
 -- NOTE 1: Colab allows only ONE 'colab ssh' connection per runtime. This
 -- is handled via SSH multiplexing (ControlMaster in ~/.ssh/colab_config,
--- managed by 'mycolab ssh -s <session>'): interactive shells and lsyncd's
+-- managed by 'mycolab new -s <session>'): interactive shells and lsyncd's
 -- rsync share one connection instead of tripping HTTP 429 against each other.
 --
--- NOTE 2: after 'colab new' + 'mycolab ssh -s <session>' (fresh VM, empty remote dir):
+-- NOTE 2: after 'mycolab new -s <session>' (fresh VM, empty remote dir):
 --   ssh -O exit {{.Host}}   # drop the stale multiplex master, if any
 -- then restart lsyncd (Ctrl+C, run again) so its startup full-sync
 -- repopulates the new VM.
 
 settings {
-    logfile    = "/tmp/lsyncd-{{.Slug}}.log",
-    statusFile = "/tmp/lsyncd-{{.Slug}}.status",
-    pidfile    = "/tmp/lsyncd-{{.Slug}}.pid",
+    logfile    = "/tmp/lsyncd-{{.Slug}}-{{.Name}}.log",
+    statusFile = "/tmp/lsyncd-{{.Slug}}-{{.Name}}.status",
+    pidfile    = "/tmp/lsyncd-{{.Slug}}-{{.Name}}.pid",
     nodaemon   = true,    -- foreground: stop with Ctrl+C
     insist     = true,   -- keep retrying across transient SSH failures
 }
@@ -155,7 +204,7 @@ settings {
 sync {
     default.rsyncssh,
     source    = "{{.Source}}",
-    host      = "{{.Host}}", -- managed by 'mycolab ssh -s <session>'
+    host      = "{{.Host}}", -- managed by 'mycolab new -s <session>'
     targetdir = "{{.Target}}",
     delay     = 1,
 
@@ -196,20 +245,29 @@ const lsyncdDocTemplate = `# LSYNCD — develop local, run remote
 | --- | --- |
 | Local source | '{{.Source}}' |
 | Remote target | '{{.Host}}:{{.Target}}' |
-| SSH host | '{{.Host}}' (` + "`~/.ssh/colab_config`" + `, managed by ` + "`mycolab ssh -s <session>`" + `) |
+| SSH host | '{{.Host}}' (` + "`~/.ssh/colab_config`" + `, managed by ` + "`mycolab new -s <session>`" + `) |
+| Config file | '{{.ConfFile}}' (next to this file) |
 
 ## Sync daemon (lsyncd)
 
 Run from '{{.Source}}':
 
 ` + "```bash" + `
-mycolab sync                        # start (foreground, full sync on startup; Ctrl+C stops it)
-tail -f /tmp/lsyncd-{{.Slug}}.log     # logs (from another terminal)
-cat /tmp/lsyncd-{{.Slug}}.status      # pending work
+mycolab sync {{.ConfFile}}                  # start (foreground, full sync on startup; Ctrl+C stops it)
+tail -f /tmp/lsyncd-{{.Slug}}-{{.Name}}.log   # logs (from another terminal)
+cat /tmp/lsyncd-{{.Slug}}-{{.Name}}.status    # pending work
 ` + "```" + `
 
 Ignored: '.git/', '.venv/', '__pycache__/', '*.pyc'.
-'lsyncd.conf.lua' and this file sync too — that is harmless.
+'{{.ConfFile}}' and this file sync too — that is harmless.
+
+## Multiple sessions
+
+Each session gets its own config: 'mycolab lsyncd -s <session>
+<source> <target>' writes '<session>.conf.lua' next to this file, so one
+checkout can sync to several runtimes. Run one daemon per config
+('mycolab sync <session>.conf.lua'); the paths above describe
+'{{.ConfFile}}', but the commands work the same for any config.
 
 ## Running / testing on the remote
 
@@ -259,7 +317,7 @@ Rules for agents:
 ## Fetching results back (one-shot pull)
 
 ` + "```bash" + `
-mycolab pull   # from '{{.Source}}': reads lsyncd.conf.lua, syncs remote -> local
+mycolab pull {{.ConfFile}}   # from '{{.Source}}': reads {{.ConfFile}}, syncs remote -> local
 ` + "```" + `
 
 This overwrites local files with remote versions when you need
@@ -276,18 +334,18 @@ rsync -avz --exclude='.git/' --exclude='.venv/' -e ssh {{.Host}}:{{.Target}}/ {{
 mycolab list                 # profiles, * = active
 mycolab use <name>           # switch account/workspace
 colab new --gpu l4           # fresh VM (run project setup after, if any)
-mycolab ssh -s <session>     # Host block + remote setup (tmux, env, hosts, tools)
+mycolab new -s <session>     # Host block + remote setup (tmux, env, hosts, tools)
 mycolab usage                # remaining compute-unit credits
 colab status | colab sessions
 colab stop -s <session>      # release the VM when done
 ` + "```" + `
 
-After 'colab new' + 'mycolab ssh -s <session>' the remote dir is empty
+After 'mycolab new -s <session>' the remote dir is empty
 and the old multiplex master is stale:
 
 ` + "```bash" + `
 ssh -O exit {{.Host}}   # drop the stale master, if any
-# then in the lsyncd terminal: Ctrl+C, run 'mycolab sync' again for a full re-sync
+# then in the lsyncd terminal: Ctrl+C, run 'mycolab sync {{.ConfFile}}' again for a full re-sync
 ` + "```" + `
 
 ## Warnings for agents

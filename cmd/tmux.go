@@ -28,10 +28,10 @@ func tmuxPushStdin() string {
 
 // pushTmuxConf uploads the bundled tmux.conf to the session's runtime.
 // Best-effort by design: the Host block is already written at this point,
-// so any failure only warns and never fails `mycolab ssh`.
+// so any failure only warns and never fails `mycolab new`.
 func pushTmuxConf(session string, sessionKnown bool) {
 	if !sessionKnown {
-		fmt.Printf("Note: session %q does not exist yet; skipping tmux.conf push (re-run `mycolab ssh -s %s` once it does).\n", session, session)
+		fmt.Printf("Note: session %q does not exist yet; skipping tmux.conf push.\n", session)
 		return
 	}
 	colabBin, err := exec.LookPath("colab")
@@ -44,8 +44,4 @@ func pushTmuxConf(session string, sessionKnown bool) {
 		return
 	}
 	fmt.Printf("Pushed tmux.conf to %s (new tmux servers pick it up).\n", tmuxConfRemotePath)
-}
-
-func init() {
-	sshCmd.Flags().Bool("no-tmux-sync", false, "skip pushing the bundled tmux.conf to "+tmuxConfRemotePath)
 }

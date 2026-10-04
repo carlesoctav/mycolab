@@ -19,7 +19,7 @@ configuration/credential files over when available.
 
     mycolab tool -s trainer muse
 
-Supported tools: muse. Unlike the best-effort 'mycolab ssh' push steps,
+Supported tools: muse, agy. Unlike the best-effort ssh-setup push steps,
 a failure here fails the command.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -73,8 +73,8 @@ func pushToolConfig(colabBin, session string, spec tools.Spec) error {
 		return fmt.Errorf("unable to determine user home directory: %w", err)
 	}
 	for _, f := range spec.ConfigFiles {
-		local := filepath.Join(home, ".config", spec.ConfigDir, f)
-		remote := filepath.Join("/root/.config", spec.ConfigDir, f)
+		local := filepath.Join(home, spec.ConfigRoot(), spec.ConfigDir, f)
+		remote := filepath.Join("/root", spec.ConfigRoot(), spec.ConfigDir, f)
 		if _, err := os.Stat(local); err != nil {
 			fmt.Printf("Note: no local %s; skipping (nothing to copy).\n", local)
 			continue

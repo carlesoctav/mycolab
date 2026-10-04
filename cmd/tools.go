@@ -5,7 +5,7 @@ import (
 	"os/exec"
 )
 
-// Base CLI tools installed on the runtime by `mycolab ssh`: fd and rg
+// Base CLI tools installed on the runtime by `mycolab new`: fd and rg
 // (replacing the webi.sh installs now that webi is down), jq, and the
 // latest stable neovim via AppImage (same approach as
 // ubuntu-tasks/nvim.sh, minus its trailing interactive `nvim` call, and
@@ -15,10 +15,6 @@ const (
 	nvimAppImageURL = "https://github.com/neovim/neovim/releases/download/stable/nvim-linux-x86_64.appimage"
 	toolsMarker     = "BASETOOLS_OK"
 )
-
-func init() {
-	sshCmd.Flags().Bool("no-tools", false, "skip installing base CLI tools (fd, rg, jq, nvim) on the runtime")
-}
 
 // toolsInstallStdin builds the `colab exec` stdin that ensures the base
 // tools exist. When rg, jq, nvim and fd/fdfind are all already present it
@@ -39,10 +35,10 @@ func toolsInstallStdin() string {
 
 // pushBaseTools installs the base CLI tools on the session's runtime.
 // Best-effort by design: the Host block is already written at this point,
-// so any failure only warns and never fails `mycolab ssh`.
+// so any failure only warns and never fails `mycolab new`.
 func pushBaseTools(session string, sessionKnown bool) {
 	if !sessionKnown {
-		fmt.Printf("Note: session %q does not exist yet; skipping base tools install (re-run `mycolab ssh -s %s` once it does).\n", session, session)
+		fmt.Printf("Note: session %q does not exist yet; skipping base tools install.\n", session)
 		return
 	}
 	colabBin, err := exec.LookPath("colab")

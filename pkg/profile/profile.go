@@ -116,6 +116,53 @@ func ActiveTokenPath() (string, error) {
 	return filepath.Join(dir, "token.json"), nil
 }
 
+// ServerPath returns the file holding the selected always-on server
+// (~/.config/mycolab/server): one ssh host name, written by
+// `mycolab server connect`.
+func ServerPath() (string, error) {
+	dir, err := MycolabDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "server"), nil
+}
+
+// GetServer returns the selected server host, or "" when none is selected.
+func GetServer() (string, error) {
+	path, err := ServerPath()
+	if err != nil {
+		return "", err
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(content)), nil
+}
+
+// SetServer selects the always-on server host.
+func SetServer(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("server host must not be empty")
+	}
+	dir, err := MycolabDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path, err := ServerPath()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(name+"\n"), 0o644)
+}
+
 // ValidateName rejects empty names and anything outside [a-zA-Z0-9_-].
 func ValidateName(name string) error {
 	if name == "" {

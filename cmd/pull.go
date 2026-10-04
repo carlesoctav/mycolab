@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -12,19 +11,29 @@ import (
 )
 
 var pullCmd = &cobra.Command{
-	Use:   "pull",
+	Use:   "pull [conf]",
 	Short: "Pull remote files back over the lsyncd mapping (remote -> local)",
 	Long: `Pull remote files back to the local checkout (remote -> local), using the
-mapping in ./lsyncd.conf.lua (run from the project directory).
+mapping in a <session>.conf.lua config (run from the project directory).
 
-Source, host, targetdir and excludes come from the config written by
-'mycolab lsyncd'; this runs the reverse of the live-sync direction as a
-one-shot rsync. Local-only files are left alone (no --delete), but files
-that exist on both sides are overwritten with the remote versions.`,
-	Args: cobra.NoArgs,
+CONF selects the config written by 'mycolab lsyncd -s <session> <source>
+<target>': pass the file ('trainer.conf.lua') or the bare session/config
+name ('trainer'). With no CONF, './lsyncd.conf.lua' wins when present
+(written by older mycolab), else the single '*.conf.lua' in the directory;
+when several exist, CONF is required.
+
+Source, host, targetdir and excludes come from the config; this runs the
+reverse of the live-sync direction as a one-shot rsync. Local-only files
+are left alone (no --delete), but files that exist on both sides are
+overwritten with the remote versions.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		confArg := ""
+		if len(args) == 1 {
+			confArg = args[0]
+		}
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
-		return pullFromRemote(".", dryRun)
+		return pullFromRemote(".", confArg, dryRun)
 	},
 }
 
@@ -33,7 +42,7 @@ func init() {
 	rootCmd.AddCommand(pullCmd)
 }
 
-// lsyncdMapping is the sync mapping parsed out of lsyncd.conf.lua.
+// lsyncdMapping is the sync mapping parsed out of a <session>.conf.lua config.
 type lsyncdMapping struct {
 	Source   string
 	Host     string
@@ -50,17 +59,13 @@ var (
 	luaQuotedRe = regexp.MustCompile(`["']([^"']+)["']`)
 )
 
-// parseLsyncdConf reads the sync mapping from the lsyncd.conf.lua in dir.
-func parseLsyncdConf(dir string) (*lsyncdMapping, error) {
-	path := filepath.Join(dir, "lsyncd.conf.lua")
+// parseLsyncdConf reads the sync mapping from the config file at confPath.
+func parseLsyncdConf(confPath string) (*lsyncdMapping, error) {
+	path := confPath
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			where := dir
-			if where == "." {
-				where = "the current directory"
-			}
-			return nil, fmt.Errorf("no lsyncd.conf.lua in %s (scaffold one with `mycolab lsyncd -s <session> <source> <target>`)", where)
+			return nil, fmt.Errorf("no lsyncd config %q (scaffold one with `mycolab lsyncd -s <session> <source> <target>`)", path)
 		}
 		return nil, err
 	}
@@ -76,7 +81,7 @@ func parseLsyncdConf(dir string) (*lsyncdMapping, error) {
 		}
 	}
 	if m.Source == "" || m.Host == "" || m.Target == "" {
-		return nil, fmt.Errorf("%s: could not find source/host/targetdir (is this an lsyncd.conf.lua written by `mycolab lsyncd`?)", path)
+		return nil, fmt.Errorf("%s: could not find source/host/targetdir (is this a <session>.conf.lua written by `mycolab lsyncd`?)", path)
 	}
 	if !strings.HasPrefix(m.Target, "/") {
 		return nil, fmt.Errorf("%s: targetdir %q is not absolute", path, m.Target)
@@ -109,8 +114,12 @@ func pullArgs(m *lsyncdMapping, dryRun bool) []string {
 	return args
 }
 
-func pullFromRemote(dir string, dryRun bool) error {
-	m, err := parseLsyncdConf(dir)
+func pullFromRemote(dir, confArg string, dryRun bool) error {
+	confPath, err := resolveLsyncdConfig(dir, confArg)
+	if err != nil {
+		return err
+	}
+	m, err := parseLsyncdConf(confPath)
 	if err != nil {
 		return err
 	}

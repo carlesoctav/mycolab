@@ -10,10 +10,6 @@ import (
 	"github.com/carlesoctav/mycolab/pkg/sshenv"
 )
 
-func init() {
-	sshCmd.Flags().Bool("no-hosts-fix", false, "skip pinning localhost to IPv4 in the runtime /etc/hosts")
-}
-
 // FixHostsLocalhostIPv4 rewrites hosts content so plain `localhost`
 // resolves to 127.0.0.1: the `localhost` token is dropped from the ::1
 // line (falling back to ip6-localhost/ip6-loopback when nothing else is
@@ -84,10 +80,10 @@ func joinComment(code, comment string) string {
 // /etc/hosts (a backup is kept at /etc/hosts.bak.mycolab). Some runtimes
 // list localhost under ::1 first, and clients that only try the first
 // resolver result then hang against nothing. Best-effort like the other
-// `mycolab ssh` push steps.
+// `mycolab new` push steps.
 func pushLocalhostFix(session string, sessionKnown bool) {
 	if !sessionKnown {
-		fmt.Printf("Note: session %q does not exist yet; skipping localhost fix (re-run `mycolab ssh -s %s` once it does).\n", session, session)
+		fmt.Printf("Note: session %q does not exist yet; skipping localhost fix.\n", session)
 		return
 	}
 	colabBin, err := exec.LookPath("colab")
