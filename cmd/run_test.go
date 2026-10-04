@@ -30,14 +30,26 @@ func TestParseMount(t *testing.T) {
 	}
 }
 
-func TestRemoteScript(t *testing.T) {
-	j := &job{Dirs: []dirMap{{Remote: "/content/p"}}, Command: []string{"python a.py | tee o"}}
-	if got := j.remoteScript(); got != "cd '/content/p' && python a.py | tee o" {
-		t.Errorf("shell string: %q", got)
+func TestTmuxRunScript(t *testing.T) {
+	j := &job{
+		ID:       "test1234",
+		Dirs:     []dirMap{{Remote: "/content/p"}},
+		Command:  []string{"python", "train.py"},
+		Sidecars: []sidecarSpec{{Name: "server", Command: "python server.py"}},
 	}
-	j = &job{Command: []string{"python", "a b.py"}}
-	if got := j.remoteScript(); got != "'python' 'a b.py'" {
-		t.Errorf("argv: %q", got)
+	s := j.tmuxRunScript()
+	for _, want := range []string{
+		"tmux new-session -d -s mycolab -n main",
+		"tmux new-window -t mycolab -n 'server'",
+		"train.py",
+		"python server.py",
+		"/tmp/mycolab_run/test1234/done",
+		"/tmp/mycolab_run/test1234/out.log",
+		"tail -n +1 -f",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("script missing %q:\n%s", want, s)
+		}
 	}
 }
 

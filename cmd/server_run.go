@@ -88,6 +88,13 @@ session (colab stop, on the server) if the command overruns.`,
 		for _, m := range j.Mounts {
 			remote = append(remote, "-v", m.Bucket+":"+m.Remote)
 		}
+		for _, s := range j.Sidecars {
+			if s.Name != "" {
+				remote = append(remote, "-S", s.Name+":"+s.Command)
+			} else {
+				remote = append(remote, "-S", s.Command)
+			}
+		}
 		if j.Timeout > 0 {
 			remote = append(remote, "--timeout", j.Timeout.String())
 		}

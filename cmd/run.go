@@ -37,12 +37,16 @@ type dirMap struct{ Local, Remote string }
 // mountSpec mounts an HF bucket at a runtime dir (via hf-mount).
 type mountSpec struct{ Bucket, Remote string }
 
+// sidecarSpec represents an auxiliary background command running in a tmux window.
+type sidecarSpec struct{ Name, Command string }
+
 // job is one `run` invocation.
 type job struct {
 	Session    string
 	ID         string
 	Dirs       []dirMap
 	Mounts     []mountSpec
+	Sidecars   []sidecarSpec
 	Command    []string
 	Timeout    time.Duration
 	Persistent bool
@@ -118,24 +122,82 @@ func rsyncIgnoreFilters(dir string) []string {
 	return nil
 }
 
-// remoteScript is what runs on the runtime: cd into the first --dir, then
-// the command. A single argument is treated as a shell string (so
-// `-- "python a.py | tee out"` works); several are quoted argv words.
-func (j *job) remoteScript() string {
-	var body string
+// tmuxRunScript builds the remote shell script that runs on the Colab runtime.
+// It sets up a tmux session 'mycolab', creates windows for sidecars,
+// launches the main command in window 0 with an exit sentinel (/tmp/mycolab_run/<id>.done),
+// and starts an SSH-blocking watcher loop that streams logs until completion.
+func (j *job) tmuxRunScript() string {
+	runDir := fmt.Sprintf("/tmp/mycolab_run/%s", j.ID)
+	logFile := fmt.Sprintf("%s/out.log", runDir)
+	doneFile := fmt.Sprintf("%s/done", runDir)
+
+	workDir := ""
+	if len(j.Dirs) > 0 {
+		workDir = j.Dirs[0].Remote
+	}
+
+	var mainCmd string
 	if len(j.Command) == 1 {
-		body = j.Command[0]
+		mainCmd = j.Command[0]
 	} else {
 		q := make([]string, len(j.Command))
 		for i, a := range j.Command {
 			q[i] = shellQuote(a)
 		}
-		body = strings.Join(q, " ")
+		mainCmd = strings.Join(q, " ")
 	}
-	if len(j.Dirs) > 0 {
-		return "cd " + shellQuote(j.Dirs[0].Remote) + " && " + body
+
+	if workDir != "" {
+		mainCmd = "cd " + shellQuote(workDir) + " && " + mainCmd
 	}
-	return body
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("mkdir -p %s && ", shellQuote(runDir)))
+	sb.WriteString(fmt.Sprintf("rm -f %s %s && ", shellQuote(logFile), shellQuote(doneFile)))
+	sb.WriteString(fmt.Sprintf("touch %s && ", shellQuote(logFile)))
+
+	// Kill any stale tmux session named 'mycolab'
+	sb.WriteString("tmux kill-session -t mycolab 2>/dev/null || true && ")
+
+	// Start window 0: main command
+	wrappedMain := fmt.Sprintf("( %s ) 2>&1 | tee %s; echo ${PIPESTATUS[0]} > %s",
+		mainCmd, shellQuote(logFile), shellQuote(doneFile))
+
+	sb.WriteString(fmt.Sprintf("tmux new-session -d -s mycolab -n main %s && ", shellQuote(wrappedMain)))
+
+	// Start sidecar windows
+	for i, sc := range j.Sidecars {
+		winName := sc.Name
+		if winName == "" {
+			winName = fmt.Sprintf("sidecar-%d", i+1)
+		}
+		cmd := sc.Command
+		if workDir != "" {
+			cmd = "cd " + shellQuote(workDir) + " && " + cmd
+		}
+		sb.WriteString(fmt.Sprintf("tmux new-window -t mycolab -n %s %s && ", shellQuote(winName), shellQuote(cmd)))
+	}
+
+	// Watcher loop: keeps SSH connection open, streams log, and waits for .done
+	watcher := fmt.Sprintf(`tail -n +1 -f %s &
+TAIL_PID=$!
+while [ ! -f %s ]; do
+  if ! tmux has-session -t mycolab 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+kill $TAIL_PID 2>/dev/null || true
+wait $TAIL_PID 2>/dev/null || true
+if [ -f %s ]; then
+  EXIT_CODE=$(cat %s)
+  exit $EXIT_CODE
+else
+  exit 1
+fi`, shellQuote(logFile), shellQuote(doneFile), shellQuote(doneFile), shellQuote(doneFile))
+
+	sb.WriteString(fmt.Sprintf("( %s )", watcher))
+	return sb.String()
 }
 
 // mountScript mounts a bucket on the runtime. HF_TOKEN reaches ssh sessions
@@ -145,9 +207,18 @@ func (m mountSpec) mountScript() string {
 		shellQuote(m.Remote), m.Bucket, shellQuote(m.Remote))
 }
 
+// parseSidecar parses "[name:]command".
+func parseSidecar(s string) sidecarSpec {
+	if i := strings.Index(s, ":"); i > 0 && !strings.Contains(s[:i], " ") {
+		return sidecarSpec{Name: s[:i], Command: s[i+1:]}
+	}
+	return sidecarSpec{Command: s}
+}
+
 func bindRunFlags(c *cobra.Command) {
 	c.Flags().StringArray("dir", nil, "local_dir:colab_dir to copy to the runtime (repeatable; the first is the working dir)")
 	c.Flags().StringArrayP("volume", "v", nil, "hf_bucket:colab_dir to mount on the runtime with hf-mount (repeatable)")
+	c.Flags().StringArrayP("sidecar", "S", nil, "auxiliary command to run in a tmux window (repeatable, format [name:]cmd)")
 	c.Flags().Duration("timeout", 0, "stop the session (colab stop) if the command runs longer than this (e.g. 2h)")
 	c.Flags().Bool("no-daemon", false, "run in the foreground and stream the log to this terminal")
 	c.Flags().Bool("persistent", false, "keep the staged copy of the dirs after the run")
@@ -186,6 +257,10 @@ func jobFromFlags(cmd *cobra.Command, args []string) (*job, error) {
 			return nil, err
 		}
 		j.Mounts = append(j.Mounts, m)
+	}
+	sidecars, _ := cmd.Flags().GetStringArray("sidecar")
+	for _, s := range sidecars {
+		j.Sidecars = append(j.Sidecars, parseSidecar(s))
 	}
 	j.Timeout, _ = cmd.Flags().GetDuration("timeout")
 	if j.Timeout < 0 {
@@ -370,10 +445,11 @@ func runPipeline(cmd *cobra.Command, j *job, stage string, out io.Writer, logf f
 		ctx, cancel = context.WithTimeout(ctx, j.Timeout)
 		defer cancel()
 	}
-	logf("running: %s", j.remoteScript())
-	err = runLogged(ctx, out, "ssh", j.Session, j.remoteScript())
+	logf("running in tmux session 'mycolab' (attach with `ssh %s -t tmux a -t mycolab`): %s", j.Session, strings.Join(j.Command, " "))
+	err = runLogged(ctx, out, "ssh", j.Session, j.tmuxRunScript())
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		logf("timeout after %s; stopping session %s", j.Timeout, j.Session)
+		_ = runLogged(context.Background(), out, "ssh", j.Session, "tmux kill-session -t mycolab 2>/dev/null || true")
 		if serr := runLogged(context.Background(), out, colabBin, "stop", "-s", j.Session); serr != nil {
 			logf("colab stop failed: %v", serr)
 		}
