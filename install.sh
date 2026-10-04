@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # mycolab installer — fetches a prebuilt binary from GitHub Releases.
 #
-# Usage (this repo is private, so auth is required):
-#   curl -fsSL -H "Authorization: Bearer $(gh auth token)" \
-#     https://raw.githubusercontent.com/carlesoctav/mycolab/main/install.sh | bash
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/carlesoctav/mycolab/main/install.sh | bash
 #
 # Env overrides:
 #   MYCOLAB_VERSION   release tag to install ("latest" by default)
 #   INSTALL_DIR       where to put the binary (~/.local/bin by default)
 #   INSTALL_DEPS      install dependencies (uv, colab-cli, lsyncd, nfs, rsync) (default: 1; set 0 to skip)
-#   GITHUB_TOKEN      token used when 'gh' is unavailable (else `gh auth token`)
+#   GITHUB_TOKEN      optional token to avoid GitHub API rate limits
 set -euo pipefail
 
 REPO="${MYCOLAB_REPO:-carlesoctav/mycolab}"
@@ -46,18 +45,13 @@ if have_gh; then
 	gh release download "$VERSION" --repo "$REPO" --pattern "$ASSET" --dir "$TMP" --clobber
 else
 	TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-	if [ -z "$TOKEN" ]; then
-		echo "error: 'gh' is not logged in and no token found." >&2
-		echo "Install 'gh' and run 'gh auth login', or set GITHUB_TOKEN to a" >&2
-		echo "token with repo read access (python3 is also required)." >&2
-		exit 1
+	AUTH_HEADER=()
+	if [ -n "$TOKEN" ]; then
+		AUTH_HEADER=(-H "Authorization: Bearer $TOKEN")
 	fi
-	if ! command -v python3 >/dev/null 2>&1; then
-		echo "error: python3 is required for the token download path (or install 'gh')." >&2
-		exit 1
-	fi
+
 	if [ "$VERSION" = "latest" ]; then
-		VERSION="$(curl -fsSL -H "Authorization: Bearer $TOKEN" \
+		VERSION="$(curl -fsSL ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} \
 			"https://api.github.com/repos/$REPO/releases/latest" |
 			grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)"
 		[ -n "$VERSION" ] || { echo "error: could not resolve latest release" >&2; exit 1; }
@@ -65,12 +59,22 @@ else
 	echo "Installing mycolab $VERSION ($OS/$ARCH) to $INSTALL_DIR ..."
 	TMP="$(mktemp -d)"
 	trap 'rm -rf "$TMP"' EXIT
-	ASSET_ID="$(curl -fsSL -H "Authorization: Bearer $TOKEN" \
-		"https://api.github.com/repos/$REPO/releases/tags/$VERSION" |
-		ASSET="$ASSET" python3 -c "import json,os,sys; print(next(a['id'] for a in json.load(sys.stdin)['assets'] if a['name'] == os.environ['ASSET']))")"
-	[ -n "$ASSET_ID" ] || { echo "error: asset $ASSET not found in $VERSION" >&2; exit 1; }
-	curl -fsSL -L -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" \
-		-o "$TMP/$ASSET" "https://api.github.com/repos/$REPO/releases/assets/$ASSET_ID"
+
+	DOWNLOAD_URL="https://github.com/$REPO/releases/download/$VERSION/$ASSET"
+	if ! curl -fsSL ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} -o "$TMP/$ASSET" "$DOWNLOAD_URL"; then
+		# Fallback via GitHub API asset endpoint if direct release redirect fails
+		if command -v python3 >/dev/null 2>&1; then
+			ASSET_ID="$(curl -fsSL ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} \
+				"https://api.github.com/repos/$REPO/releases/tags/$VERSION" |
+				ASSET="$ASSET" python3 -c "import json,os,sys; print(next(a['id'] for a in json.load(sys.stdin)['assets'] if a['name'] == os.environ['ASSET']))")"
+			[ -n "$ASSET_ID" ] || { echo "error: asset $ASSET not found in $VERSION" >&2; exit 1; }
+			curl -fsSL -L ${AUTH_HEADER[@]+"${AUTH_HEADER[@]}"} -H "Accept: application/octet-stream" \
+				-o "$TMP/$ASSET" "https://api.github.com/repos/$REPO/releases/assets/$ASSET_ID"
+		else
+			echo "error: failed to download $DOWNLOAD_URL" >&2
+			exit 1
+		fi
+	fi
 fi
 
 tar -xzf "$TMP/$ASSET" -C "$TMP"
