@@ -3,7 +3,6 @@
 A collection of utilities on top of `colab-cli` to make developing, testing, and running jobs on Google Colab runtimes and servers much easier.
 
 Key capabilities:
-- **Multiple accounts/workspaces**: Seamlessly switch between Google accounts with persistent profiles.
 - **Automated SSH wiring & multiplexing**: Manage per-session SSH host configs with connection sharing to prevent HTTP 429 rate limits.
 - **Environment & accelerator fixes**: Automatically sync kernel env vars into sshd so `nvidia-smi` and accelerators work immediately over SSH.
 - **Sync / Live sync**: Two-way sync workflows (`sync` and `pull`) between local repositories and Colab runtimes respecting `.gitignore`.
