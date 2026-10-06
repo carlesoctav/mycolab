@@ -81,7 +81,7 @@ mycolab run -s trainer --gpu L4 \
 | `--persistent` | Keep the staged copy of the directories after the run finishes. |
 | `--gpu`, `--tpu`, `--high-mem` | Accelerator options passed to runtime creation (e.g. `T4`, `L4`, `A100`, `v5e1`). |
 
-Logs are saved locally to `~/mycolab/run/<session>/<id>.log`.
+Logs are saved next to your project at `./.mycolab/run/<session>_<id>.log`.
 
 ### Sidecars
 
@@ -107,10 +107,10 @@ mycolab server run -s trainer --gpu L4 \
   -- python train.py
 ```
 
-`server run` pushes your profile credentials to the connected server, stages the directories at `~/mycolab/run/<session>/<id>/` on the server, creates the Colab session, mounts volumes, and executes the job detached on the server. You can safely close your laptop and follow logs later via:
+`server run` pushes your profile credentials to the connected server, stages the directories at `~/.mycolab/run/<session>_<id>/` on the server, creates the Colab session, mounts volumes, and executes the job detached on the server. You can safely close your laptop and follow logs later via:
 
 ```bash
-ssh <server> tail -f ~/mycolab/run/<session>/<id>.log
+ssh <server> tail -f ~/.mycolab/run/<session>_<id>.log
 ```
 
 ## Sync / Live sync
@@ -190,7 +190,7 @@ Profiles live under `~/.config/mycolab`:
 
 ### Session Creation & SSH Wiring
 
-`mycolab new -s <session> ...` creates the session and writes a `Host <session>` block (ProxyCommand over `colab ssh --proxy-mode`) into a separate `~/.ssh/colab_config`, following the active profile.
+`mycolab new -s <session> ...` creates the session and writes a `Host <session>` block (ProxyCommand over `mycolab ssh -s`, which never auto-creates missing sessions) into a separate `~/.ssh/colab_config`, following the active profile.
 
 Each session gets its own hostname, allowing multiple sessions to stay usable side by side; the entry is updated in place. Managed entries whose session exists in no profile are pruned as inactive (`--no-prune` skips this); foreign entries are always left alone. (A legacy single-host `Host colab` entry from older mycolab versions is removed on the next run.)
 

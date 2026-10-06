@@ -15,16 +15,16 @@ var serverRunCmd = &cobra.Command{
 	Short: "Run a command on a new Colab session, orchestrated from the server",
 	Long: `Like 'mycolab run', but everything runs on the always-on server: the
 active profile's token is pushed there, the --dir dirs are copied to
-~/mycolab/run/<session>/<id>/ on the server, and the server creates the
+~/.mycolab/run/<session>_<id>/ on the server, and the server creates the
 session, mounts buckets (-v), rsyncs the dirs to the runtime, runs the
-command and captures the log at ~/mycolab/run/<session>/<id>.log (on the
+command and captures the log at ~/.mycolab/run/<session>_<id>.log (on the
 server). The staged copy is removed afterwards unless --persistent.
 
     mycolab server run -s trainer --gpu L4 --dir ./proj:/content/proj \
         -v myuser/data:/content/data --timeout 6h -- python train.py
 
 By default the job is detached on the server, so you can close your laptop;
-follow it with 'ssh <server> tail -f ~/mycolab/run/<session>/<id>.log'.
+follow it with 'ssh <server> tail -f ~/.mycolab/run/<session>_<id>.log'.
 --no-daemon streams the log back to this terminal. --timeout stops the
 session (colab stop, on the server) if the command overruns.`,
 	Args: cobra.ArbitraryArgs,
@@ -56,7 +56,7 @@ session (colab stop, on the server) if the command overruns.`,
 		if err != nil {
 			return err
 		}
-		remoteStage := fmt.Sprintf("%s/mycolab/run/%s/%s", home, j.Session, j.ID)
+		remoteStage := fmt.Sprintf("%s/.mycolab/run/%s_%s", home, j.Session, j.ID)
 		staged := make([]dirMap, len(j.Dirs))
 		if len(j.Dirs) > 0 {
 			rsyncBin, err := exec.LookPath("rsync")
@@ -114,7 +114,7 @@ session (colab stop, on the server) if the command overruns.`,
 		if err := runOnServer(server, remote); err != nil {
 			return err
 		}
-		logRel := filepath.ToSlash(filepath.Join("mycolab", "run", j.Session, j.ID+".log"))
+		logRel := filepath.ToSlash(filepath.Join(".mycolab", "run", j.Session+"_"+j.ID+".log"))
 		fmt.Printf("Server log: %s:~/%s\n", server, logRel)
 		return nil
 	},

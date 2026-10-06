@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -47,6 +48,7 @@ type job struct {
 	Dirs       []dirMap
 	Mounts     []mountSpec
 	Sidecars   []sidecarSpec
+	Env        []string
 	Command    []string
 	Timeout    time.Duration
 	Persistent bool
@@ -56,18 +58,20 @@ type job struct {
 	Staged bool
 }
 
-// runRoot is where stage dirs and logs live: ~/mycolab/run on whichever
-// machine orchestrates the job.
+// runRoot is where stage dirs and logs live: .mycolab/run under the
+// current directory, so each project keeps its own runs next to the code.
 func runRoot() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "", fmt.Errorf("unable to determine user home directory: %w", err)
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		return "", fmt.Errorf("unable to determine current directory: %w", err)
 	}
-	return filepath.Join(home, "mycolab", "run"), nil
+	return filepath.Join(cwd, ".mycolab", "run"), nil
 }
 
-func (j *job) stageDir(root string) string { return filepath.Join(root, j.Session, j.ID) }
-func (j *job) logPath(root string) string  { return filepath.Join(root, j.Session, j.ID+".log") }
+func (j *job) stageDir(root string) string { return filepath.Join(root, j.Session+"_"+j.ID) }
+func (j *job) logPath(root string) string {
+	return filepath.Join(root, j.Session+"_"+j.ID+".log")
+}
 
 func newRunID() (string, error) {
 	b := make([]byte, 4)
@@ -122,11 +126,13 @@ func rsyncIgnoreFilters(dir string) []string {
 	return nil
 }
 
-// tmuxRunScript builds the remote shell script that runs on the Colab runtime.
-// It sets up a tmux session 'mycolab', creates windows for sidecars,
-// launches the main command in window 0 with an exit sentinel (/tmp/mycolab_run/<id>.done),
-// and starts an SSH-blocking watcher loop that streams logs until completion.
-func (j *job) tmuxRunScript() string {
+// setupScript builds the remote shell script that prepares the run: it
+// creates the run dir, kills any stale 'mycolab' tmux session, launches
+// the main command in window 0 with an exit sentinel
+// (/tmp/mycolab_run/<id>.done), and opens sidecar windows. It exits once
+// everything is launched; log streaming is watcherScript's job, so a
+// dropped tunnel can resume the stream without re-running setup.
+func (j *job) setupScript() string {
 	runDir := fmt.Sprintf("/tmp/mycolab_run/%s", j.ID)
 	logFile := fmt.Sprintf("%s/out.log", runDir)
 	doneFile := fmt.Sprintf("%s/done", runDir)
@@ -147,25 +153,40 @@ func (j *job) tmuxRunScript() string {
 		mainCmd = strings.Join(q, " ")
 	}
 
+	var envPrefix string
+	if len(j.Env) > 0 {
+		local := parseEnvList(j.Env)
+		if len(local) > 0 {
+			var exports []string
+			for k, v := range local {
+				exports = append(exports, fmt.Sprintf("%s=%s", k, shellQuote(v)))
+			}
+			sort.Strings(exports)
+			envPrefix = "export " + strings.Join(exports, " ") + " && "
+		}
+	}
+
 	if workDir != "" {
 		mainCmd = "cd " + shellQuote(workDir) + " && " + mainCmd
 	}
+	if envPrefix != "" {
+		mainCmd = envPrefix + mainCmd
+	}
 
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("mkdir -p %s && ", shellQuote(runDir)))
-	sb.WriteString(fmt.Sprintf("rm -f %s %s && ", shellQuote(logFile), shellQuote(doneFile)))
-	sb.WriteString(fmt.Sprintf("touch %s && ", shellQuote(logFile)))
+	steps := []string{
+		fmt.Sprintf("mkdir -p %s", shellQuote(runDir)),
+		fmt.Sprintf("rm -f %s %s", shellQuote(logFile), shellQuote(doneFile)),
+		fmt.Sprintf("touch %s", shellQuote(logFile)),
+		// Kill any stale tmux session named 'mycolab'.
+		"tmux kill-session -t mycolab 2>/dev/null || true",
+	}
 
-	// Kill any stale tmux session named 'mycolab'
-	sb.WriteString("tmux kill-session -t mycolab 2>/dev/null || true && ")
-
-	// Start window 0: main command
+	// Start window 0: main command.
 	wrappedMain := fmt.Sprintf("( %s ) 2>&1 | tee %s; echo ${PIPESTATUS[0]} > %s",
 		mainCmd, shellQuote(logFile), shellQuote(doneFile))
+	steps = append(steps, fmt.Sprintf("tmux new-session -d -s mycolab -n main %s", shellQuote(wrappedMain)))
 
-	sb.WriteString(fmt.Sprintf("tmux new-session -d -s mycolab -n main %s && ", shellQuote(wrappedMain)))
-
-	// Start sidecar windows
+	// Start sidecar windows.
 	for i, sc := range j.Sidecars {
 		winName := sc.Name
 		if winName == "" {
@@ -175,11 +196,29 @@ func (j *job) tmuxRunScript() string {
 		if workDir != "" {
 			cmd = "cd " + shellQuote(workDir) + " && " + cmd
 		}
-		sb.WriteString(fmt.Sprintf("tmux new-window -t mycolab -n %s %s && ", shellQuote(winName), shellQuote(cmd)))
+		if envPrefix != "" {
+			cmd = envPrefix + cmd
+		}
+		steps = append(steps, fmt.Sprintf("tmux new-window -t mycolab -n %s %s", shellQuote(winName), shellQuote(cmd)))
 	}
 
-	// Watcher loop: keeps SSH connection open, streams log, and waits for .done
-	watcher := fmt.Sprintf(`tail -n +1 -f %s &
+	return strings.Join(steps, " && ")
+}
+
+// watcherScript builds the remote shell script that streams the run log
+// and waits for completion: it tails out.log from 1-based byte offset
+// fromByte (a resumed stream skips already-received bytes), waits for the
+// .done sentinel (or the tmux session to vanish), then exits with the
+// job's exit code. A remote 255 is mapped to 254 because ssh itself uses
+// 255 for transport failures, and the supervisor tells the two apart.
+func (j *job) watcherScript(fromByte int64) string {
+	if fromByte < 1 {
+		fromByte = 1
+	}
+	runDir := fmt.Sprintf("/tmp/mycolab_run/%s", j.ID)
+	logFile := fmt.Sprintf("%s/out.log", runDir)
+	doneFile := fmt.Sprintf("%s/done", runDir)
+	return fmt.Sprintf(`( tail -c +%d -f %s &
 TAIL_PID=$!
 while [ ! -f %s ]; do
   if ! tmux has-session -t mycolab 2>/dev/null; then
@@ -187,17 +226,22 @@ while [ ! -f %s ]; do
   fi
   sleep 1
 done
+sleep 2
 kill $TAIL_PID 2>/dev/null || true
 wait $TAIL_PID 2>/dev/null || true
 if [ -f %s ]; then
   EXIT_CODE=$(cat %s)
+  if [ "$EXIT_CODE" -eq 255 ]; then EXIT_CODE=254; fi
   exit $EXIT_CODE
 else
   exit 1
-fi`, shellQuote(logFile), shellQuote(doneFile), shellQuote(doneFile), shellQuote(doneFile))
+fi )`, fromByte, shellQuote(logFile), shellQuote(doneFile), shellQuote(doneFile), shellQuote(doneFile))
+}
 
-	sb.WriteString(fmt.Sprintf("( %s )", watcher))
-	return sb.String()
+// tmuxRunScript is the single-shot form (setup plus a from-start
+// watcher), kept for tests; runPipeline runs the supervised split form.
+func (j *job) tmuxRunScript() string {
+	return j.setupScript() + " && " + j.watcherScript(1)
 }
 
 // mountScript mounts a bucket on the runtime. HF_TOKEN reaches ssh sessions
@@ -231,6 +275,23 @@ func bindRunFlags(c *cobra.Command) {
 	}
 }
 
+func isEnvAssign(s string) bool {
+	i := strings.Index(s, "=")
+	if i <= 0 {
+		return false
+	}
+	key := s[:i]
+	for idx, r := range key {
+		if idx == 0 && (r >= '0' && r <= '9') {
+			return false
+		}
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 // jobFromFlags builds a job from run flags and the args after `--`.
 func jobFromFlags(cmd *cobra.Command, args []string) (*job, error) {
 	session, err := requireSession(cmd)
@@ -242,6 +303,14 @@ func jobFromFlags(cmd *cobra.Command, args []string) (*job, error) {
 		return nil, fmt.Errorf("missing command: put it after `--`, e.g. `mycolab %s -s %s --dir .:/content/proj -- python train.py`", cmd.Name(), session)
 	}
 	j := &job{Session: session, Command: args}
+	j.Env, _ = cmd.Flags().GetStringArray("env")
+	for len(j.Command) > 0 && isEnvAssign(j.Command[0]) {
+		j.Env = append(j.Env, j.Command[0])
+		j.Command = j.Command[1:]
+	}
+	if len(j.Command) == 0 {
+		return nil, fmt.Errorf("missing command: put it after `--`, e.g. `mycolab %s -s %s --dir .:/content/proj -- python train.py`", cmd.Name(), session)
+	}
 	dirs, _ := cmd.Flags().GetStringArray("dir")
 	for _, d := range dirs {
 		m, err := parseDirMap(d)
@@ -288,8 +357,10 @@ run a command, capturing the log:
         -v myuser/data:/content/data -- python train.py
 
 The dirs are rsynced directly to the runtime respecting .gitignore patterns.
-The log goes to ~/mycolab/run/<session>/<id>.log. By default the job is detached
+The log goes to ./.mycolab/run/<session>_<id>.log. By default the job is detached
 (it prints the id and log path); --no-daemon streams the log here instead.
+The ssh tunnel is supervised: drops re-establish over the multiplex master
+and the log resumes, instead of failing the run.
 --timeout stops the session if the command overruns. Accelerator flags
 mirror 'colab new'. Buckets need hf and hf-mount on the runtime (installed
 by 'mycolab new'; set HF_TOKEN with 'mycolab env HF_TOKEN <token>').
@@ -407,6 +478,15 @@ func runPipeline(cmd *cobra.Command, j *job, out io.Writer, logf func(string, ..
 		if err := runSSHSetup(cmd, j.Session); err != nil {
 			return err
 		}
+	} else if len(j.Env) > 0 {
+		logf("syncing environment variables")
+		syncRuntimeEnv(j.Session, true, j.Env)
+	}
+	// One multiplex master carries every ssh/rsync call below (plus any
+	// interactive shell the user opens mid-run) over Colab's single
+	// bridge slot; drops re-establish automatically from here on.
+	if err := ensureMaster(context.Background(), j.Session, logf, setupMasterBudget); err != nil {
+		return err
 	}
 	for _, m := range j.Mounts {
 		logf("mounting hf bucket %s at %s", m.Bucket, m.Remote)
@@ -424,7 +504,7 @@ func runPipeline(cmd *cobra.Command, j *job, out io.Writer, logf func(string, ..
 		args = append(args, "-e", "ssh",
 			"--rsync-path", "mkdir -p "+shellQuote(d.Remote)+" && rsync",
 			strings.TrimRight(d.Local, "/")+"/", j.Session+":"+d.Remote+"/")
-		if err := runLogged(context.Background(), out, rsyncBin, args...); err != nil {
+		if err := runSSHLogged(context.Background(), out, logf, j.Session, rsyncBin, args...); err != nil {
 			return fmt.Errorf("copy %s: %w", d.Local, err)
 		}
 	}
@@ -436,7 +516,10 @@ func runPipeline(cmd *cobra.Command, j *job, out io.Writer, logf func(string, ..
 		defer cancel()
 	}
 	logf("running in tmux session 'mycolab' (attach with `ssh %s -t tmux a -t mycolab`): %s", j.Session, strings.Join(j.Command, " "))
-	err = runLogged(ctx, out, "ssh", j.Session, j.tmuxRunScript())
+	if err := runSSHLogged(ctx, out, logf, j.Session, "ssh", j.Session, j.setupScript()); err != nil {
+		return fmt.Errorf("setup failed: %w", err)
+	}
+	err = j.streamWithResume(ctx, out, logf)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		logf("timeout after %s; stopping session %s", j.Timeout, j.Session)
 		_ = runLogged(context.Background(), out, "ssh", j.Session, "tmux kill-session -t mycolab 2>/dev/null || true")

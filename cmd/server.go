@@ -233,7 +233,7 @@ name replaces the runtime.`,
 // profile's token first. Only 'server new' runs this.
 func runServerSSH(cmd *cobra.Command, server, current, session string) error {
 	// Server side: Host entry plus runtime push steps.
-	remoteSSH := append([]string{"mycolab", "ssh", "-s", session}, sshSetupPassthrough(cmd)...)
+	remoteSSH := append([]string{"mycolab", "prepare", "-s", session}, sshSetupPassthrough(cmd)...)
 	if err := runOnServer(server, remoteSSH); err != nil {
 		return err
 	}
@@ -246,12 +246,17 @@ func runServerSSH(cmd *cobra.Command, server, current, session string) error {
 }
 
 // sshSetupPassthrough returns the ssh opt-out flags set on cmd, for
-// forwarding to the server-side 'mycolab ssh'.
+// forwarding to the server-side 'mycolab prepare'.
 func sshSetupPassthrough(cmd *cobra.Command) []string {
 	var out []string
 	for _, f := range sshSetupFlagNames {
 		if v, _ := cmd.Flags().GetBool(f); v {
 			out = append(out, "--"+f)
+		}
+	}
+	if envs, _ := cmd.Flags().GetStringArray("env"); len(envs) > 0 {
+		for _, e := range envs {
+			out = append(out, "-e", e)
 		}
 	}
 	return out

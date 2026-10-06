@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -113,7 +114,7 @@ func captureKernelEnv(colabBin, session string) (map[string]string, error) {
 // managed sshd SetEnv block, so `ssh` sessions see the same accelerators
 // and tools as `colab console` / `colab exec`. Best-effort by design:
 // failures warn, never fail `mycolab new`.
-func syncRuntimeEnv(session string, sessionKnown bool) {
+func syncRuntimeEnv(session string, sessionKnown bool, extraEnvs []string) {
 	if !sessionKnown {
 		fmt.Printf("Note: session %q does not exist yet; skipping env sync.\n", session)
 		return
@@ -144,6 +145,18 @@ func syncRuntimeEnv(session string, sessionKnown bool) {
 			kept[k] = v
 		}
 		fmt.Printf("sync %d custom env: %s\n", len(custom), strings.Join(profile.CustomEnvNames(custom), ", "))
+	}
+	local := parseEnvList(extraEnvs)
+	if len(local) > 0 {
+		for k, v := range local {
+			kept[k] = v
+		}
+		localNames := make([]string, 0, len(local))
+		for k := range local {
+			localNames = append(localNames, k)
+		}
+		sort.Strings(localNames)
+		fmt.Printf("sync %d local env: %s\n", len(local), strings.Join(localNames, ", "))
 	}
 	directive, skipped := sshenv.RenderSetEnv(kept)
 	if directive == "" {
@@ -184,4 +197,25 @@ func syncRuntimeEnv(session string, sessionKnown bool) {
 		fmt.Printf(" (%d skipped: newline values)", len(skipped))
 	}
 	fmt.Printf("; reconnect `ssh %s` to pick them up.\n", session)
+}
+
+// parseEnvList parses KEY=VAL or KEY (looked up in local env) entries.
+func parseEnvList(entries []string) map[string]string {
+	out := make(map[string]string)
+	for _, entry := range entries {
+		if i := strings.Index(entry, "="); i >= 0 {
+			k := entry[:i]
+			v := entry[i+1:]
+			if k != "" {
+				out[k] = v
+			}
+		} else if entry != "" {
+			if v, ok := os.LookupEnv(entry); ok {
+				out[entry] = v
+			} else {
+				fmt.Printf("Note: local env %q is not set; skipping.\n", entry)
+			}
+		}
+	}
+	return out
 }

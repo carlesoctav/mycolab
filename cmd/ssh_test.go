@@ -1,167 +1,65 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestUpsertSessionHostEmpty(t *testing.T) {
-	updated, prevProfile, removedLegacy := upsertSessionHost("", "work", "trainer")
-	if prevProfile != "" {
-		t.Errorf("prevProfile = %q, want empty", prevProfile)
+// bridgeHome builds an isolated HOME holding profile "main" with the given
+// sessions.json content, activated via the colab-cli symlink, plus a stub
+// colab binary on PATH.
+func bridgeHome(t *testing.T, sessions string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := filepath.Join(home, ".config", "mycolab")
+	cli := filepath.Join(home, ".config", "colab-cli")
+	if err := os.MkdirAll(cfg, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if removedLegacy {
-		t.Error("removedLegacy = true, want false")
+	if err := os.MkdirAll(cli, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"Managed by mycolab",
-		"Host trainer\n",
-		"ProxyCommand colab ssh --proxy-mode -s trainer\n",
-		"# Profile: work | Session: trainer",
-	} {
-		if !strings.Contains(updated, want) {
-			t.Errorf("upsert missing %q:\n%s", want, updated)
-		}
+	target := filepath.Join(cfg, "main.json")
+	if err := os.WriteFile(target, []byte(sessions), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(updated, "Host colab\n") {
-		t.Errorf("upsert must not create legacy Host colab:\n%s", updated)
+	if err := os.Symlink(target, filepath.Join(cli, "sessions.json")); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "colab"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestResolveBridgeSession(t *testing.T) {
+	bridgeHome(t, `{"trainer": {"accelerator": "L4", "variant": "GPU", "endpoint": "e"}}`)
+	got, err := resolveBridgeSession("trainer")
+	if err != nil {
+		t.Fatalf("existing session: %v", err)
+	}
+	if !strings.HasSuffix(got, string(os.PathSeparator)+"colab") {
+		t.Errorf("colab binary = %q", got)
+	}
+	if _, err := resolveBridgeSession("ghost"); err == nil {
+		t.Fatal("missing session: nil error, want refusal")
+	} else if !strings.Contains(err.Error(), "refusing to auto-create") {
+		t.Errorf("missing session error = %q, want auto-create refusal", err)
 	}
 }
 
-func TestUpsertSessionHostPreservesOthers(t *testing.T) {
-	first, _, _ := upsertSessionHost("", "work", "trainer")
-	second, prevProfile, removedLegacy := upsertSessionHost(first, "work", "eval")
-	if prevProfile != "" {
-		t.Errorf("prevProfile = %q, want empty for new host", prevProfile)
-	}
-	if removedLegacy {
-		t.Error("removedLegacy = true, want false")
-	}
-	for _, want := range []string{
-		"Host trainer\n",
-		"ProxyCommand colab ssh --proxy-mode -s trainer\n",
-		"Host eval\n",
-		"ProxyCommand colab ssh --proxy-mode -s eval\n",
-	} {
-		if !strings.Contains(second, want) {
-			t.Errorf("upsert missing %q:\n%s", want, second)
-		}
-	}
-}
-
-func TestUpsertSessionHostSingleHeader(t *testing.T) {
-	first, _, _ := upsertSessionHost("", "work", "trainer")
-	second, _, _ := upsertSessionHost(first, "work", "eval")
-	third, _, _ := upsertSessionHost(second, "work", "trainer")
-	for name, content := range map[string]string{"first": first, "second": second, "third": third} {
-		if got := strings.Count(content, "Managed by mycolab"); got != 1 {
-			t.Errorf("%s upsert: header appears %d times, want 1:\n%s", name, got, content)
-		}
-	}
-}
-
-func TestUpsertSessionHostIdempotent(t *testing.T) {
-	first, _, _ := upsertSessionHost("", "work", "trainer")
-	second, prevProfile, _ := upsertSessionHost(first, "work", "trainer")
-	if prevProfile != "work" {
-		t.Errorf("prevProfile = %q, want work", prevProfile)
-	}
-	if got := strings.Count(second, "Host trainer\n"); got != 1 {
-		t.Errorf("Host trainer appears %d times, want 1:\n%s", got, second)
-	}
-}
-
-func TestUpsertSessionHostProfileChange(t *testing.T) {
-	first, _, _ := upsertSessionHost("", "work", "trainer")
-	second, prevProfile, _ := upsertSessionHost(first, "personal", "trainer")
-	if prevProfile != "work" {
-		t.Errorf("prevProfile = %q, want work", prevProfile)
-	}
-	if !strings.Contains(second, "# Profile: personal | Session: trainer") {
-		t.Errorf("profile comment not updated:\n%s", second)
-	}
-	if strings.Contains(second, "# Profile: work | Session: trainer") {
-		t.Errorf("stale profile comment kept:\n%s", second)
-	}
-}
-
-func TestUpsertSessionHostRemovesLegacyColab(t *testing.T) {
-	legacy := "# Managed by mycolab — regenerated on every 'mycolab ssh' run, manual edits will be lost.\n" +
-		"# Profile: work | Session: trainer\n" +
-		"Host colab\n" +
-		"    HostName colab-runtime\n" +
-		"    User root\n" +
-		"    ProxyCommand colab ssh --proxy-mode -s trainer\n"
-	updated, _, removedLegacy := upsertSessionHost(legacy, "work", "trainer")
-	if !removedLegacy {
-		t.Error("removedLegacy = false, want true")
-	}
-	if strings.Contains(updated, "Host colab\n") {
-		t.Errorf("legacy Host colab not removed:\n%s", updated)
-	}
-	if !strings.Contains(updated, "Host trainer\n") {
-		t.Errorf("new Host trainer missing:\n%s", updated)
-	}
-}
-
-func TestPruneStaleHostsRemovesDead(t *testing.T) {
-	first, _, _ := upsertSessionHost("", "work", "trainer")
-	content, _, _ := upsertSessionHost(first, "work", "eval")
-	updated, removed := pruneStaleHosts(content, map[string]bool{"trainer": true})
-	if len(removed) != 1 || removed[0] != "eval" {
-		t.Errorf("removed = %q, want [eval]", removed)
-	}
-	if strings.Contains(updated, "Host eval\n") {
-		t.Errorf("stale Host eval not pruned:\n%s", updated)
-	}
-	if !strings.Contains(updated, "Host trainer\n") {
-		t.Errorf("live Host trainer missing after prune:\n%s", updated)
-	}
-}
-
-func TestPruneStaleHostsKeepsAllWhenAlive(t *testing.T) {
-	first, _, _ := upsertSessionHost("", "work", "trainer")
-	content, _, _ := upsertSessionHost(first, "work", "eval")
-	updated, removed := pruneStaleHosts(content, map[string]bool{"trainer": true, "eval": true})
-	if len(removed) != 0 {
-		t.Errorf("removed = %q, want none", removed)
-	}
-	if updated != content {
-		t.Errorf("content changed when nothing to prune:\n%s", updated)
-	}
-}
-
-func TestPruneStaleHostsPreservesForeign(t *testing.T) {
-	content, _, _ := upsertSessionHost("", "work", "trainer")
-	content += "Host myserver\n    HostName example.com\n"
-	updated, removed := pruneStaleHosts(content, map[string]bool{"trainer": true})
-	if len(removed) != 0 {
-		t.Errorf("removed = %q, want none", removed)
-	}
-	if !strings.Contains(updated, "Host myserver\n") {
-		t.Errorf("foreign Host myserver not preserved:\n%s", updated)
-	}
-}
-
-func TestPruneStaleHostsEmpty(t *testing.T) {
-	updated, removed := pruneStaleHosts("", map[string]bool{"trainer": true})
-	if len(removed) != 0 {
-		t.Errorf("removed = %q, want none", removed)
-	}
-	if updated != "" {
-		t.Errorf("updated = %q, want empty", updated)
-	}
-}
-
-func TestValidateSessionHost(t *testing.T) {
-	for _, ok := range []string{"trainer", "train-1", "eval_x", "a.b", "colab"} {
-		if err := validateSessionHost(ok); err != nil {
-			t.Errorf("validateSessionHost(%q) = %v, want nil", ok, err)
-		}
-	}
-	for _, bad := range []string{"", "has space", "tab\there", "hash#tag", "star*", "q?", "bang!", "quo'te", `dq"uote`, `back\slash`, "-leading-dash"} {
-		if err := validateSessionHost(bad); err == nil {
-			t.Errorf("validateSessionHost(%q) = nil, want error", bad)
-		}
+func TestResolveBridgeSessionNoProfile(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := resolveBridgeSession("trainer"); err == nil {
+		t.Fatal("nil error, want no-active-profile error")
+	} else if !strings.Contains(err.Error(), "no active profile") {
+		t.Errorf("error = %q", err)
 	}
 }

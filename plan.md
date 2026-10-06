@@ -9,7 +9,7 @@ mycolab add personal
 mycolab list [list all the user give *for the current sessions]
 mycolab use [open a multiple choice where i can select]
 mycolab use xx [switch to xx workspace]
-mycolab ssh -> [and write the .ssh/config colab host with the selected sessions, please make it interactive where i can choose with ky jk(down up, vim keybind), and enter]
+mycolab prepare -> [and write the .ssh/config colab host with the selected sessions, please make it interactive where i can choose with ky jk(down up, vim keybind), and enter]
 
 please use seperate ssh config file for this colab
 https://stackoverflow.com/questions/19966721/multiple-ssh-config-files

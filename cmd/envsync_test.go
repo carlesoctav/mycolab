@@ -45,3 +45,30 @@ func TestRunColabTimeoutAppendsRemoteTimeout(t *testing.T) {
 		t.Errorf("non-exec args gained --timeout in %q", out)
 	}
 }
+
+func TestParseEnvList(t *testing.T) {
+	t.Setenv("MYCOLAB_TEST_VAR", "local_val")
+	entries := []string{
+		"FOO=bar",
+		"BAZ=hello=world",
+		"MYCOLAB_TEST_VAR",
+		"NON_EXISTENT_VAR_12345",
+		"",
+	}
+	m := parseEnvList(entries)
+	if m["FOO"] != "bar" {
+		t.Errorf("FOO: got %q, want 'bar'", m["FOO"])
+	}
+	if m["BAZ"] != "hello=world" {
+		t.Errorf("BAZ: got %q, want 'hello=world'", m["BAZ"])
+	}
+	if m["MYCOLAB_TEST_VAR"] != "local_val" {
+		t.Errorf("MYCOLAB_TEST_VAR: got %q, want 'local_val'", m["MYCOLAB_TEST_VAR"])
+	}
+	if _, ok := m["NON_EXISTENT_VAR_12345"]; ok {
+		t.Errorf("NON_EXISTENT_VAR_12345 should not be in map")
+	}
+	if len(m) != 3 {
+		t.Errorf("got len %d, want 3", len(m))
+	}
+}

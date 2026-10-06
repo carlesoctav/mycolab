@@ -45,10 +45,56 @@ func TestTmuxRunScript(t *testing.T) {
 		"python server.py",
 		"/tmp/mycolab_run/test1234/done",
 		"/tmp/mycolab_run/test1234/out.log",
-		"tail -n +1 -f",
+		"tail -c +1 -f",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script missing %q:\n%s", want, s)
+		}
+	}
+}
+
+func TestTmuxRunScriptWithEnv(t *testing.T) {
+	j := &job{
+		ID:       "test1234",
+		Dirs:     []dirMap{{Remote: "/content/p"}},
+		Env:      []string{"FOO=bar", "BAZ=hello world"},
+		Command:  []string{"python", "train.py"},
+		Sidecars: []sidecarSpec{{Name: "server", Command: "python server.py"}},
+	}
+	s := j.tmuxRunScript()
+	for _, want := range []string{
+		"export BAZ=",
+		"hello world",
+		"FOO=",
+		"bar",
+		"python server.py",
+		"/content/p",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("script missing %q:\n%s", want, s)
+		}
+	}
+}
+
+func TestIsEnvAssign(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"FOO=bar", true},
+		{"A_B_C=123", true},
+		{"_HIDDEN=val", true},
+		{"VLLM_ALLOW_RUNTIME_LORA_UPDATING=1", true},
+		{"1INVALID=foo", false},
+		{"=no_key", false},
+		{"no_equal", false},
+		{"--flag=val", false},
+		{"-e", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := isEnvAssign(c.in); got != c.want {
+			t.Errorf("isEnvAssign(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
 }
@@ -80,3 +126,52 @@ func TestRsyncIgnoreFilters(t *testing.T) {
 	}
 }
 
+func TestJobLogPaths(t *testing.T) {
+	j := &job{Session: "trainer", ID: "abc123"}
+	if got := j.logPath("/root"); got != "/root/trainer_abc123.log" {
+		t.Errorf("logPath = %q", got)
+	}
+	if got := j.stageDir("/root"); got != "/root/trainer_abc123" {
+		t.Errorf("stageDir = %q", got)
+	}
+}
+
+func TestSetupAndWatcherScripts(t *testing.T) {
+	j := &job{
+		ID:       "test1234",
+		Dirs:     []dirMap{{Remote: "/content/p"}},
+		Command:  []string{"python", "train.py"},
+		Sidecars: []sidecarSpec{{Name: "server", Command: "python server.py"}},
+	}
+	setup := j.setupScript()
+	for _, want := range []string{
+		"tmux new-session -d -s mycolab -n main",
+		"tmux new-window -t mycolab -n 'server'",
+		"/tmp/mycolab_run/test1234/done",
+		"train.py",
+	} {
+		if !strings.Contains(setup, want) {
+			t.Errorf("setup missing %q:\n%s", want, setup)
+		}
+	}
+	if strings.Contains(setup, "tail -c") {
+		t.Errorf("setup must not stream (a resume would re-run setup):\n%s", setup)
+	}
+	w := j.watcherScript(6)
+	for _, want := range []string{
+		"tail -c +6 -f",
+		"/tmp/mycolab_run/test1234/out.log",
+		"/tmp/mycolab_run/test1234/done",
+		`if [ "$EXIT_CODE" -eq 255 ]; then EXIT_CODE=254; fi`,
+	} {
+		if !strings.Contains(w, want) {
+			t.Errorf("watcher missing %q:\n%s", w, want)
+		}
+	}
+	if strings.Contains(j.watcherScript(0), "tail -c +0") {
+		t.Errorf("watcher must clamp offsets to >= 1")
+	}
+	if !strings.Contains(j.tmuxRunScript(), "tail -c +1 -f") {
+		t.Errorf("single-shot form must stream from the start")
+	}
+}

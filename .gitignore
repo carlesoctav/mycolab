@@ -1,3 +1,4 @@
 bin/
 ref/
-mycolab
+# Locally built binary (anchored: must not ignore skills/mycolab/).
+/mycolab
