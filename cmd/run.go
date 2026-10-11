@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // The run pipeline. One orchestrator (execJob) does the same thing wherever
@@ -44,8 +45,10 @@ type job struct {
 	ID         string
 	Dirs       []dirMap
 	Mounts     []mountSpec
-	Sidecars   []sidecarSpec
-	Env        []string
+	Sidecars       []sidecarSpec
+	LocalForwards  []string
+	RemoteForwards []string
+	Env            []string
 	Command    []string
 	Timeout    time.Duration
 	Persistent bool
@@ -68,6 +71,18 @@ func runRoot() (string, error) {
 func (j *job) stageDir(root string) string { return filepath.Join(root, j.Session+"_"+j.ID) }
 func (j *job) logPath(root string) string {
 	return filepath.Join(root, j.Session+"_"+j.ID+".log")
+}
+
+// forwardArgs returns the -L and -R arguments for ssh.
+func (j *job) forwardArgs() []string {
+	var args []string
+	for _, f := range j.LocalForwards {
+		args = append(args, "-L", f)
+	}
+	for _, f := range j.RemoteForwards {
+		args = append(args, "-R", f)
+	}
+	return args
 }
 
 func newRunID() (string, error) {
@@ -235,6 +250,8 @@ func bindRunFlags(c *cobra.Command) {
 	c.Flags().StringArray("dir", nil, "local_dir:colab_dir to copy to the runtime (repeatable; the first is the working dir)")
 	bindVolumeFlags(c)
 	c.Flags().StringArrayP("sidecar", "S", nil, "auxiliary command to run in a tmux window (repeatable, format [name:]cmd)")
+	c.Flags().StringArrayP("local-forward", "L", nil, "forward local port to remote address (repeatable, format [bind_address:]port:host:hostport)")
+	c.Flags().StringArrayP("remote-forward", "R", nil, "forward remote port to local address (repeatable, format [bind_address:]port:host:hostport)")
 	c.Flags().Duration("timeout", 0, "stop the session (colab stop) if the command runs longer than this (e.g. 2h)")
 	c.Flags().Bool("no-daemon", false, "run in the foreground and stream the log to this terminal")
 	c.Flags().Bool("persistent", false, "keep the staged copy of the dirs after the run")
@@ -245,6 +262,19 @@ func bindRunFlags(c *cobra.Command) {
 	for _, f := range []string{"id", "staged", "detached"} {
 		_ = c.Flags().MarkHidden(f)
 	}
+	origNorm := c.Flags().GetNormalizeFunc()
+	c.Flags().SetNormalizeFunc(func(f *pflag.FlagSet, name string) pflag.NormalizedName {
+		switch name {
+		case "L":
+			name = "local-forward"
+		case "R":
+			name = "remote-forward"
+		}
+		if origNorm != nil {
+			return origNorm(f, name)
+		}
+		return pflag.NormalizedName(name)
+	})
 }
 
 func isEnvAssign(s string) bool {
@@ -302,6 +332,26 @@ func jobFromFlags(cmd *cobra.Command, args []string) (*job, error) {
 	sidecars, _ := cmd.Flags().GetStringArray("sidecar")
 	for _, s := range sidecars {
 		j.Sidecars = append(j.Sidecars, parseSidecar(s))
+	}
+	lForwards, _ := cmd.Flags().GetStringArray("local-forward")
+	if cmd.Flags().Changed("local-forward") && len(lForwards) == 0 {
+		return nil, fmt.Errorf("invalid -L/--local-forward: value cannot be empty")
+	}
+	for _, f := range lForwards {
+		if strings.TrimSpace(f) == "" {
+			return nil, fmt.Errorf("invalid -L/--local-forward: value cannot be empty")
+		}
+		j.LocalForwards = append(j.LocalForwards, f)
+	}
+	rForwards, _ := cmd.Flags().GetStringArray("remote-forward")
+	if cmd.Flags().Changed("remote-forward") && len(rForwards) == 0 {
+		return nil, fmt.Errorf("invalid -R/--remote-forward: value cannot be empty")
+	}
+	for _, f := range rForwards {
+		if strings.TrimSpace(f) == "" {
+			return nil, fmt.Errorf("invalid -R/--remote-forward: value cannot be empty")
+		}
+		j.RemoteForwards = append(j.RemoteForwards, f)
 	}
 	j.Timeout, _ = cmd.Flags().GetDuration("timeout")
 	if j.Timeout < 0 {
@@ -457,8 +507,14 @@ func runPipeline(cmd *cobra.Command, j *job, out io.Writer, logf func(string, ..
 	// One multiplex master carries every ssh/rsync call below (plus any
 	// interactive shell the user opens mid-run) over Colab's single
 	// bridge slot; drops re-establish automatically from here on.
-	if err := ensureMaster(context.Background(), j.Session, logf, setupMasterBudget); err != nil {
+	if err := ensureMaster(context.Background(), j.Session, logf, setupMasterBudget, j.forwardArgs()...); err != nil {
 		return err
+	}
+	for _, f := range j.LocalForwards {
+		logf("forwarding local port %s", f)
+	}
+	for _, f := range j.RemoteForwards {
+		logf("forwarding remote port %s", f)
 	}
 	for _, m := range j.Mounts {
 		logf("mounting hf bucket %s at %s", m.Bucket, m.Remote)
@@ -476,7 +532,7 @@ func runPipeline(cmd *cobra.Command, j *job, out io.Writer, logf func(string, ..
 		args = append(args, "-e", "ssh",
 			"--rsync-path", "mkdir -p "+shellQuote(d.Remote)+" && rsync",
 			strings.TrimRight(d.Local, "/")+"/", j.Session+":"+d.Remote+"/")
-		if err := runSSHLogged(context.Background(), out, logf, j.Session, rsyncBin, args...); err != nil {
+		if err := runSSHLogged(context.Background(), out, logf, j.Session, j.forwardArgs(), rsyncBin, args...); err != nil {
 			return fmt.Errorf("copy %s: %w", d.Local, err)
 		}
 	}
@@ -488,7 +544,7 @@ func runPipeline(cmd *cobra.Command, j *job, out io.Writer, logf func(string, ..
 		defer cancel()
 	}
 	logf("running in tmux session 'mycolab' (attach with `ssh %s -t tmux a -t mycolab`): %s", j.Session, strings.Join(j.Command, " "))
-	if err := runSSHLogged(ctx, out, logf, j.Session, "ssh", j.Session, j.setupScript()); err != nil {
+	if err := runSSHLogged(ctx, out, logf, j.Session, j.forwardArgs(), "ssh", j.Session, j.setupScript()); err != nil {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 	err = j.streamWithResume(ctx, out, logf)

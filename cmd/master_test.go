@@ -49,8 +49,14 @@ if [ "$1" = "-O" ] && [ "$2" = "exit" ]; then
   echo "-O exit $3" >> "$STUB_STATE/calls"
   exit 0
 fi
+if [ "$1" = "-O" ] && [ "$2" = "forward" ]; then
+  shift 2
+  echo "-O forward $*" >> "$STUB_STATE/calls"
+  exit 0
+fi
 if [ "$1" = "-fN" ]; then
-  echo "-fN $2" >> "$STUB_STATE/calls"
+  shift
+  echo "-fN $*" >> "$STUB_STATE/calls"
   code=$(cat "$STUB_STATE/create_code" 2>/dev/null || echo 0)
   if [ "$code" = "0" ]; then echo 0 > "$STUB_STATE/check_code"; fi
   if [ -n "$STUB_CREATE_STDERR" ]; then printf '%s' "$STUB_CREATE_STDERR" >&2; fi
@@ -254,3 +260,49 @@ func TestStreamWithResumeGivesUp(t *testing.T) {
 		t.Errorf("attempts = %q, want >= 2", stubFile(t, st, "n"))
 	}
 }
+
+func TestEnsureMasterWithForwardsDead(t *testing.T) {
+	st := stubSSH(t, map[string]string{"check_code": "1"})
+	if err := ensureMaster(context.Background(), "sess", discardLogf, time.Minute, "-L", "8000:localhost:8000", "-R", "8002:localhost:8002"); err != nil {
+		t.Fatalf("ensureMaster: %v", err)
+	}
+	calls := stubFile(t, st, "calls")
+	if !strings.Contains(calls, "-fN -L 8000:localhost:8000 -R 8002:localhost:8002 sess") {
+		t.Errorf("creation missing forward flags:\n%s", calls)
+	}
+}
+
+func TestEnsureMasterWithForwardsAlive(t *testing.T) {
+	st := stubSSH(t, map[string]string{"check_code": "0"})
+	if err := ensureMaster(context.Background(), "sess", discardLogf, time.Minute, "-L", "8000:localhost:8000", "-R", "8002:localhost:8002"); err != nil {
+		t.Fatalf("ensureMaster: %v", err)
+	}
+	calls := stubFile(t, st, "calls")
+	if !strings.Contains(calls, "-O check sess") {
+		t.Errorf("missing check call:\n%s", calls)
+	}
+	if !strings.Contains(calls, "-O forward -L 8000:localhost:8000 -R 8002:localhost:8002 sess") {
+		t.Errorf("missing -O forward call on alive master:\n%s", calls)
+	}
+	if strings.Contains(calls, "-fN") {
+		t.Errorf("alive master must not recreate:\n%s", calls)
+	}
+}
+
+func TestStreamWithResumePreservesForwardsOnDrop(t *testing.T) {
+	st := stubSSH(t, map[string]string{"check_code": "1", "mode": "drop_once"})
+	j := &job{
+		Session:       "sess",
+		ID:            "abc123",
+		LocalForwards: []string{"8000:localhost:8000"},
+	}
+	var out bytes.Buffer
+	if err := j.streamWithResume(context.Background(), &out, discardLogf); err != nil {
+		t.Fatalf("streamWithResume: %v", err)
+	}
+	calls := stubFile(t, st, "calls")
+	if !strings.Contains(calls, "-fN -L 8000:localhost:8000 sess") {
+		t.Errorf("re-establishment missing forward flags:\n%s", calls)
+	}
+}
+

@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestParseDirMap(t *testing.T) {
@@ -175,3 +178,131 @@ func TestSetupAndWatcherScripts(t *testing.T) {
 		t.Errorf("single-shot form must stream from the start")
 	}
 }
+
+func TestJobForwardFlags(t *testing.T) {
+	newCmd := func(runFn func(cmd *cobra.Command, args []string)) *cobra.Command {
+		c := &cobra.Command{
+			Use: "run [flags] -- <command>",
+			Run: runFn,
+		}
+		c.Flags().StringP("session", "s", "", "")
+		bindRunFlags(c)
+		return c
+	}
+
+	t.Run("shortFlagsRepeatable", func(t *testing.T) {
+		var jobGot *job
+		var errGot error
+		c := newCmd(func(cmd *cobra.Command, args []string) {
+			jobGot, errGot = jobFromFlags(cmd, args)
+		})
+		c.SetArgs([]string{
+			"-s", "test-sess",
+			"-L", "8000:localhost:8000",
+			"-L", "8001:localhost:8001",
+			"-R", "8002:localhost:8002",
+			"--", "python", "train.py",
+		})
+		if err := c.Execute(); err != nil {
+			t.Fatalf("c.Execute(): %v", err)
+		}
+		if errGot != nil {
+			t.Fatalf("jobFromFlags: %v", errGot)
+		}
+		wantL := []string{"8000:localhost:8000", "8001:localhost:8001"}
+		if !reflect.DeepEqual(jobGot.LocalForwards, wantL) {
+			t.Errorf("LocalForwards = %v, want %v", jobGot.LocalForwards, wantL)
+		}
+		wantR := []string{"8002:localhost:8002"}
+		if !reflect.DeepEqual(jobGot.RemoteForwards, wantR) {
+			t.Errorf("RemoteForwards = %v, want %v", jobGot.RemoteForwards, wantR)
+		}
+		wantArgs := []string{"-L", "8000:localhost:8000", "-L", "8001:localhost:8001", "-R", "8002:localhost:8002"}
+		if !reflect.DeepEqual(jobGot.forwardArgs(), wantArgs) {
+			t.Errorf("forwardArgs() = %v, want %v", jobGot.forwardArgs(), wantArgs)
+		}
+	})
+
+	t.Run("longFlagsAndAliases", func(t *testing.T) {
+		var jobGot *job
+		var errGot error
+		c := newCmd(func(cmd *cobra.Command, args []string) {
+			jobGot, errGot = jobFromFlags(cmd, args)
+		})
+		c.SetArgs([]string{
+			"-s", "test-sess",
+			"--local-forward", "9000:localhost:9000",
+			"--L", "9001:localhost:9001",
+			"--remote-forward", "9002:localhost:9002",
+			"--R", "9003:localhost:9003",
+			"--", "echo", "hi",
+		})
+		if err := c.Execute(); err != nil {
+			t.Fatalf("c.Execute(): %v", err)
+		}
+		if errGot != nil {
+			t.Fatalf("jobFromFlags: %v", errGot)
+		}
+		wantL := []string{"9000:localhost:9000", "9001:localhost:9001"}
+		if !reflect.DeepEqual(jobGot.LocalForwards, wantL) {
+			t.Errorf("LocalForwards = %v, want %v", jobGot.LocalForwards, wantL)
+		}
+		wantR := []string{"9002:localhost:9002", "9003:localhost:9003"}
+		if !reflect.DeepEqual(jobGot.RemoteForwards, wantR) {
+			t.Errorf("RemoteForwards = %v, want %v", jobGot.RemoteForwards, wantR)
+		}
+	})
+
+	t.Run("emptyForwardRejected", func(t *testing.T) {
+		var errGot error
+		c := newCmd(func(cmd *cobra.Command, args []string) {
+			_, errGot = jobFromFlags(cmd, args)
+		})
+		c.SetArgs([]string{"-s", "test-sess", "-L", "", "--", "echo"})
+		if err := c.Execute(); err != nil {
+			t.Fatalf("c.Execute(): %v", err)
+		}
+		if errGot == nil {
+			t.Error("expected error for empty -L, got nil")
+		}
+
+		c2 := newCmd(func(cmd *cobra.Command, args []string) {
+			_, errGot = jobFromFlags(cmd, args)
+		})
+		c2.SetArgs([]string{"-s", "test-sess", "-R", "   ", "--", "echo"})
+		if err := c2.Execute(); err != nil {
+			t.Fatalf("c2.Execute(): %v", err)
+		}
+		if errGot == nil {
+			t.Error("expected error for empty -R, got nil")
+		}
+	})
+}
+
+func TestBuildServerRunRemoteArgsForwards(t *testing.T) {
+	c := &cobra.Command{Use: "run"}
+	bindRunFlags(c)
+	bindAcceleratorFlags(c)
+	bindSSHSetupFlags(c)
+	j := &job{
+		Session:        "trainer",
+		ID:             "xyz789",
+		LocalForwards:  []string{"8000:localhost:8000", "8001:localhost:8001"},
+		RemoteForwards: []string{"8002:localhost:8002"},
+		Command:        []string{"python", "train.py"},
+	}
+	remote := buildServerRunRemoteArgs(c, j, nil)
+	joined := strings.Join(remote, " ")
+	for _, want := range []string{
+		"-L 8000:localhost:8000",
+		"-L 8001:localhost:8001",
+		"-R 8002:localhost:8002",
+		"-- python train.py",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("remote args missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+

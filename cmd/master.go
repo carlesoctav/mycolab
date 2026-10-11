@@ -80,8 +80,11 @@ func firstLine(s string) string {
 // round follows creation, so losing the single bridge slot (HTTP 429 to a
 // differently-wired holder) surfaces here and the caller backs off — while
 // a winner on the shared socket is simply adopted on the next check.
-func tryEnsureMaster(ctx context.Context, host string) error {
+func tryEnsureMaster(ctx context.Context, host string, forwards ...string) error {
 	if masterAlive(host) {
+		if len(forwards) > 0 {
+			return applyMasterForwards(ctx, host, forwards)
+		}
 		return nil
 	}
 	sshBin, err := exec.LookPath("ssh")
@@ -92,7 +95,9 @@ func tryEnsureMaster(ctx context.Context, host string) error {
 	createCtx, cancel := context.WithTimeout(ctx, masterCreateTimeout)
 	defer cancel()
 	var errBuf strings.Builder
-	c := exec.CommandContext(createCtx, sshBin, "-fN", host)
+	args := append([]string{"-fN"}, forwards...)
+	args = append(args, host)
+	c := exec.CommandContext(createCtx, sshBin, args...)
 	c.Stderr = &errBuf
 	if err := c.Run(); err != nil {
 		msg := strings.TrimSpace(errBuf.String())
@@ -110,14 +115,33 @@ func tryEnsureMaster(ctx context.Context, host string) error {
 	return nil
 }
 
+// applyMasterForwards requests port forwardings on an already-running multiplex master.
+func applyMasterForwards(ctx context.Context, host string, forwards []string) error {
+	sshBin, err := exec.LookPath("ssh")
+	if err != nil {
+		return fmt.Errorf("ssh binary not found in PATH")
+	}
+	args := append([]string{"-O", "forward"}, forwards...)
+	args = append(args, host)
+	c := exec.CommandContext(ctx, sshBin, args...)
+	if out, err := c.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("apply port forwards to %q: %v (%s)", host, err, firstLine(msg))
+		}
+		return fmt.Errorf("apply port forwards to %q: %w", host, err)
+	}
+	return nil
+}
+
 // ensureMaster reuses or creates the multiplex master for host, retrying
 // with backoff until budget (or ctx) runs out. A missing session fails
 // fast via errSessionMissing instead of burning the budget.
-func ensureMaster(ctx context.Context, host string, logf func(string, ...any), budget time.Duration) error {
+func ensureMaster(ctx context.Context, host string, logf func(string, ...any), budget time.Duration, forwards ...string) error {
 	deadline := time.Now().Add(budget)
 	var lastErr error
 	for attempt := 1; ; attempt++ {
-		if err := tryEnsureMaster(ctx, host); err == nil {
+		if err := tryEnsureMaster(ctx, host, forwards...); err == nil {
 			if attempt > 1 {
 				logf("ssh master for %q re-established", host)
 			}
@@ -148,12 +172,12 @@ func ensureMaster(ctx context.Context, host string, logf func(string, ...any), b
 // retrying once after re-establishing the master when the first attempt
 // fails. Mounts, copies and job setup are short phases, so one retry
 // suffices; the long stream phase uses streamWithResume instead.
-func runSSHLogged(ctx context.Context, out io.Writer, logf func(string, ...any), session, bin string, args ...string) error {
+func runSSHLogged(ctx context.Context, out io.Writer, logf func(string, ...any), session string, forwards []string, bin string, args ...string) error {
 	err := runLogged(ctx, out, bin, args...)
 	if err == nil || ctx.Err() != nil {
 		return err
 	}
-	if merr := ensureMaster(ctx, session, logf, setupMasterBudget); merr != nil {
+	if merr := ensureMaster(ctx, session, logf, setupMasterBudget, forwards...); merr != nil {
 		if ctx.Err() != nil || errors.Is(merr, errSessionMissing) {
 			return merr
 		}
@@ -272,7 +296,7 @@ func (j *job) streamWithResume(ctx context.Context, out io.Writer, logf func(str
 		case <-time.After(d):
 		}
 		if rest := remaining - d; rest > 0 {
-			if merr := ensureMaster(ctx, j.Session, logf, rest); merr != nil {
+			if merr := ensureMaster(ctx, j.Session, logf, rest, j.forwardArgs()...); merr != nil {
 				if ctx.Err() != nil || errors.Is(merr, errSessionMissing) {
 					return merr
 				}

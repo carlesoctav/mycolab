@@ -78,43 +78,7 @@ session (colab stop, on the server) if the command overruns.`,
 				staged[i] = dirMap{Local: dst, Remote: d.Remote}
 			}
 		}
-		remote := []string{"mycolab", "run", "-s", j.Session, "--id", j.ID}
-		if len(staged) > 0 {
-			remote = append(remote, "--staged")
-		}
-		for _, d := range staged {
-			remote = append(remote, "--dir", d.Local+":"+d.Remote)
-		}
-		for _, m := range j.Mounts {
-			v := m.Bucket + ":" + m.Remote
-			if m.ReadOnly {
-				v += ":ro"
-			}
-			remote = append(remote, "-v", v)
-		}
-		for _, s := range j.Sidecars {
-			if s.Name != "" {
-				remote = append(remote, "-S", s.Name+":"+s.Command)
-			} else {
-				remote = append(remote, "-S", s.Command)
-			}
-		}
-		if j.Timeout > 0 {
-			remote = append(remote, "--timeout", j.Timeout.String())
-		}
-		if j.Persistent {
-			remote = append(remote, "--persistent")
-		}
-		if j.Reuse {
-			remote = append(remote, "--reuse")
-		}
-		if nd, _ := cmd.Flags().GetBool("no-daemon"); nd {
-			remote = append(remote, "--no-daemon")
-		}
-		remote = append(remote, acceleratorPassthrough(cmd)...)
-		remote = append(remote, sshSetupPassthrough(cmd)...)
-		remote = append(remote, "--")
-		remote = append(remote, j.Command...)
+		remote := buildServerRunRemoteArgs(cmd, j, staged)
 		if err := runOnServer(server, remote); err != nil {
 			return err
 		}
@@ -138,6 +102,53 @@ func acceleratorPassthrough(cmd *cobra.Command) []string {
 		out = append(out, "--high-mem")
 	}
 	return out
+}
+
+func buildServerRunRemoteArgs(cmd *cobra.Command, j *job, staged []dirMap) []string {
+	remote := []string{"mycolab", "run", "-s", j.Session, "--id", j.ID}
+	if len(staged) > 0 {
+		remote = append(remote, "--staged")
+	}
+	for _, d := range staged {
+		remote = append(remote, "--dir", d.Local+":"+d.Remote)
+	}
+	for _, m := range j.Mounts {
+		v := m.Bucket + ":" + m.Remote
+		if m.ReadOnly {
+			v += ":ro"
+		}
+		remote = append(remote, "-v", v)
+	}
+	for _, s := range j.Sidecars {
+		if s.Name != "" {
+			remote = append(remote, "-S", s.Name+":"+s.Command)
+		} else {
+			remote = append(remote, "-S", s.Command)
+		}
+	}
+	for _, f := range j.LocalForwards {
+		remote = append(remote, "-L", f)
+	}
+	for _, f := range j.RemoteForwards {
+		remote = append(remote, "-R", f)
+	}
+	if j.Timeout > 0 {
+		remote = append(remote, "--timeout", j.Timeout.String())
+	}
+	if j.Persistent {
+		remote = append(remote, "--persistent")
+	}
+	if j.Reuse {
+		remote = append(remote, "--reuse")
+	}
+	if nd, _ := cmd.Flags().GetBool("no-daemon"); nd {
+		remote = append(remote, "--no-daemon")
+	}
+	remote = append(remote, acceleratorPassthrough(cmd)...)
+	remote = append(remote, sshSetupPassthrough(cmd)...)
+	remote = append(remote, "--")
+	remote = append(remote, j.Command...)
+	return remote
 }
 
 func init() {
