@@ -69,3 +69,17 @@ func TestSSHSetupPassthrough(t *testing.T) {
 		t.Fatalf("sshSetupPassthrough = %v, want [--no-env-sync --no-tools]", got)
 	}
 }
+
+func TestVolumeFlagsPresent(t *testing.T) {
+	for name, c := range map[string]*cobra.Command{
+		"new":        newCmd,
+		"server new": serverNewCmd,
+	} {
+		f := c.Flags().Lookup("volume")
+		if f == nil {
+			t.Errorf("%s: missing --volume flag", name)
+		} else if f.Shorthand != "v" {
+			t.Errorf("%s: --volume shorthand = %q, want -v", name, f.Shorthand)
+		}
+	}
+}

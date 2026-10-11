@@ -17,15 +17,25 @@ var newCmd = &cobra.Command{
 it for ssh (Host entry plus runtime push steps):
 
     mycolab new -s trainer --gpu L4
+    mycolab new -s trainer --gpu L4 -v me/data:/content/data
 
 Accelerator flags mirror 'colab new'; the --no-* flags tune the setup
-step. Note: 'new' with an existing name replaces the runtime (the old
+step. Mount HF Storage Buckets with -v/--volume. Note: 'new' with an existing name replaces the runtime (the old
 one is orphaned until Colab reclaims it).`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sessionName, err := requireSession(cmd)
 		if err != nil {
 			return err
+		}
+		volumes, _ := cmd.Flags().GetStringArray("volume")
+		var mounts []mountSpec
+		for _, v := range volumes {
+			m, err := parseMount(v)
+			if err != nil {
+				return err
+			}
+			mounts = append(mounts, m)
 		}
 		current, err := profile.GetCurrent()
 		if err != nil {
@@ -42,13 +52,17 @@ one is orphaned until Colab reclaims it).`,
 			return err
 		}
 		dropMaster(sessionName)
-		return runSSHSetup(cmd, sessionName)
+		if err := runSSHSetup(cmd, sessionName); err != nil {
+			return err
+		}
+		return mountVolumes(sessionName, mounts)
 	},
 }
 
 func init() {
 	bindAcceleratorFlags(newCmd)
 	bindSSHSetupFlags(newCmd)
+	bindVolumeFlags(newCmd)
 	rootCmd.AddCommand(newCmd)
 }
 

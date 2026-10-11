@@ -86,7 +86,11 @@ session (colab stop, on the server) if the command overruns.`,
 			remote = append(remote, "--dir", d.Local+":"+d.Remote)
 		}
 		for _, m := range j.Mounts {
-			remote = append(remote, "-v", m.Bucket+":"+m.Remote)
+			v := m.Bucket + ":" + m.Remote
+			if m.ReadOnly {
+				v += ":ro"
+			}
+			remote = append(remote, "-v", v)
 		}
 		for _, s := range j.Sidecars {
 			if s.Name != "" {

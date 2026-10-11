@@ -34,6 +34,7 @@ func init() {
 	serverCmd.PersistentFlags().String("server", "", "SSH host to use instead of the connected server")
 	bindAcceleratorFlags(serverNewCmd)
 	bindSSHSetupFlags(serverNewCmd)
+	bindVolumeFlags(serverNewCmd)
 	rootCmd.AddCommand(serverCmd)
 	serverCmd.AddCommand(serverConnectCmd, serverNewCmd)
 }
@@ -209,6 +210,15 @@ name replaces the runtime.`,
 		if err != nil {
 			return err
 		}
+		volumes, _ := cmd.Flags().GetStringArray("volume")
+		var mounts []mountSpec
+		for _, v := range volumes {
+			m, err := parseMount(v)
+			if err != nil {
+				return err
+			}
+			mounts = append(mounts, m)
+		}
 		server, err := resolveServerHost(cmd)
 		if err != nil {
 			return err
@@ -224,7 +234,10 @@ name replaces the runtime.`,
 			return err
 		}
 		dropServerMaster(server, sessionName)
-		return runServerSSH(cmd, server, current, sessionName)
+		if err := runServerSSH(cmd, server, current, sessionName); err != nil {
+			return err
+		}
+		return mountVolumes(sessionName, mounts)
 	},
 }
 

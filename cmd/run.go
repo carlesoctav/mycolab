@@ -35,9 +35,6 @@ import (
 // dirMap maps a local (or already-staged) dir onto a runtime dir.
 type dirMap struct{ Local, Remote string }
 
-// mountSpec mounts an HF bucket at a runtime dir (via hf-mount).
-type mountSpec struct{ Bucket, Remote string }
-
 // sidecarSpec represents an auxiliary background command running in a tmux window.
 type sidecarSpec struct{ Name, Command string }
 
@@ -96,24 +93,6 @@ func parseDirMap(s string) (dirMap, error) {
 		return dirMap{}, err
 	}
 	return dirMap{Local: abs, Remote: strings.TrimRight(remote, "/")}, nil
-}
-
-// parseMount parses "hf_bucket:colab_dir" (bucket is user/name[/subpath]).
-func parseMount(s string) (mountSpec, error) {
-	i := strings.LastIndex(s, ":")
-	if i <= 0 || i == len(s)-1 {
-		return mountSpec{}, fmt.Errorf("invalid -v %q (want hf_bucket:colab_dir)", s)
-	}
-	bucket, remote := s[:i], s[i+1:]
-	bucket = strings.TrimPrefix(bucket, "hf://buckets/")
-	bucket = strings.TrimPrefix(bucket, "hf://")
-	if !strings.Contains(bucket, "/") || strings.ContainsAny(bucket, " \t\r\n'\"\\$`;&|<>()") {
-		return mountSpec{}, fmt.Errorf("invalid -v %q: bucket must look like user/name", s)
-	}
-	if !strings.HasPrefix(remote, "/") {
-		return mountSpec{}, fmt.Errorf("invalid -v %q: colab dir %q must be an absolute path", s, remote)
-	}
-	return mountSpec{Bucket: bucket, Remote: strings.TrimRight(remote, "/")}, nil
 }
 
 // rsyncIgnoreFilters returns the rsync filter args for a source directory,
@@ -244,13 +223,6 @@ func (j *job) tmuxRunScript() string {
 	return j.setupScript() + " && " + j.watcherScript(1)
 }
 
-// mountScript mounts a bucket on the runtime. HF_TOKEN reaches ssh sessions
-// via `mycolab env HF_TOKEN <token>`.
-func (m mountSpec) mountScript() string {
-	return fmt.Sprintf(`mkdir -p %s && hf-mount start --fuse ${HF_TOKEN:+--hf-token "$HF_TOKEN"} bucket %s %s`,
-		shellQuote(m.Remote), m.Bucket, shellQuote(m.Remote))
-}
-
 // parseSidecar parses "[name:]command".
 func parseSidecar(s string) sidecarSpec {
 	if i := strings.Index(s, ":"); i > 0 && !strings.Contains(s[:i], " ") {
@@ -261,7 +233,7 @@ func parseSidecar(s string) sidecarSpec {
 
 func bindRunFlags(c *cobra.Command) {
 	c.Flags().StringArray("dir", nil, "local_dir:colab_dir to copy to the runtime (repeatable; the first is the working dir)")
-	c.Flags().StringArrayP("volume", "v", nil, "hf_bucket:colab_dir to mount on the runtime with hf-mount (repeatable)")
+	bindVolumeFlags(c)
 	c.Flags().StringArrayP("sidecar", "S", nil, "auxiliary command to run in a tmux window (repeatable, format [name:]cmd)")
 	c.Flags().Duration("timeout", 0, "stop the session (colab stop) if the command runs longer than this (e.g. 2h)")
 	c.Flags().Bool("no-daemon", false, "run in the foreground and stream the log to this terminal")
