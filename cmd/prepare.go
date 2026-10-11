@@ -46,7 +46,8 @@ The bundled tmux.conf is also pushed to /root/.tmux.conf on the runtime
 (best-effort; --no-tmux-sync skips this), the runtime's kernel env is
 installed into sshd so ssh sessions see the same accelerators as the
 console (--no-env-sync skips this), localhost is pinned to IPv4 in
-/etc/hosts (--no-hosts-fix skips this), and base CLI tools (fd, rg, jq,
+/etc/hosts (--no-hosts-fix skips this), terminal terminfo (xterm-ghostty)
+is synced (--no-terminfo skips this), and base CLI tools (fd, rg, jq,
 nvim) are installed via apt (--no-tools skips this). Re-running after switching
 profiles closes the stale multiplex master so the next connect dials the
 new runtime.
@@ -147,6 +148,9 @@ func runSSHSetup(cmd *cobra.Command, sessionName string) error {
 	}
 	if noTmux, _ := cmd.Flags().GetBool("no-tmux-sync"); !noTmux {
 		pushTmuxConf(sessionName, known)
+	}
+	if noTerminfo, _ := cmd.Flags().GetBool("no-terminfo"); !noTerminfo {
+		pushTerminfo(sessionName, known)
 	}
 	if noEnv, _ := cmd.Flags().GetBool("no-env-sync"); !noEnv {
 		envs, _ := cmd.Flags().GetStringArray("env")
@@ -561,7 +565,7 @@ func init() {
 }
 
 // sshSetupFlagNames lists the opt-out flags bound by bindSSHSetupFlags.
-var sshSetupFlagNames = []string{"no-prune", "no-tmux-sync", "no-env-sync", "no-hosts-fix", "no-tools"}
+var sshSetupFlagNames = []string{"no-prune", "no-tmux-sync", "no-terminfo", "no-env-sync", "no-hosts-fix", "no-tools"}
 
 // bindSSHSetupFlags registers the ssh-setup opt-out flags on c. The same
 // set is offered by 'mycolab new' (which runs the ssh setup after creating
@@ -570,6 +574,7 @@ func bindSSHSetupFlags(c *cobra.Command) {
 	c.Flags().StringArrayP("env", "e", nil, "environment variable to sync (KEY or KEY=value, repeatable)")
 	c.Flags().Bool("no-prune", false, "skip removing managed Host entries whose session exists in no profile")
 	c.Flags().Bool("no-tmux-sync", false, "skip pushing the bundled tmux.conf to "+tmuxConfRemotePath)
+	c.Flags().Bool("no-terminfo", false, "skip uploading terminal terminfo (xterm-ghostty) to the runtime")
 	c.Flags().Bool("no-env-sync", false, "skip syncing the runtime kernel env into sshd for ssh sessions")
 	c.Flags().Bool("no-hosts-fix", false, "skip pinning localhost to IPv4 in the runtime /etc/hosts")
 	c.Flags().Bool("no-tools", false, "skip installing base CLI tools (fd, rg, jq, nvim) on the runtime")

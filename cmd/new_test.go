@@ -41,7 +41,7 @@ func TestSSHSetupFlagsPresent(t *testing.T) {
 		"new":        newCmd,
 		"server new": serverNewCmd,
 	} {
-		for _, f := range []string{"no-prune", "no-tmux-sync", "no-env-sync", "no-hosts-fix", "no-tools"} {
+		for _, f := range []string{"no-prune", "no-tmux-sync", "no-terminfo", "no-env-sync", "no-hosts-fix", "no-tools"} {
 			if c.Flags().Lookup(f) == nil {
 				t.Errorf("%s: missing --%s flag", name, f)
 			}
