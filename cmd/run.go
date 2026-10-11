@@ -247,7 +247,7 @@ func (j *job) tmuxRunScript() string {
 // mountScript mounts a bucket on the runtime. HF_TOKEN reaches ssh sessions
 // via `mycolab env HF_TOKEN <token>`.
 func (m mountSpec) mountScript() string {
-	return fmt.Sprintf(`mkdir -p %s && hf-mount start ${HF_TOKEN:+--hf-token "$HF_TOKEN"} bucket %s %s`,
+	return fmt.Sprintf(`mkdir -p %s && hf-mount start --fuse ${HF_TOKEN:+--hf-token "$HF_TOKEN"} bucket %s %s`,
 		shellQuote(m.Remote), m.Bucket, shellQuote(m.Remote))
 }
 

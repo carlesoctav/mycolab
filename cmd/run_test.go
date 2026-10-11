@@ -101,7 +101,7 @@ func TestIsEnvAssign(t *testing.T) {
 
 func TestMountScript(t *testing.T) {
 	s := mountSpec{Bucket: "me/data", Remote: "/content/data"}.mountScript()
-	if !strings.Contains(s, "hf-mount start") || !strings.Contains(s, "bucket me/data '/content/data'") {
+	if !strings.Contains(s, "hf-mount start --fuse") || !strings.Contains(s, "bucket me/data '/content/data'") {
 		t.Errorf("script: %q", s)
 	}
 }
