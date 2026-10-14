@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 // The run pipeline. One orchestrator (execJob) does the same thing wherever
@@ -249,9 +248,8 @@ func parseSidecar(s string) sidecarSpec {
 func bindRunFlags(c *cobra.Command) {
 	c.Flags().StringArray("dir", nil, "local_dir:colab_dir to copy to the runtime (repeatable; the first is the working dir)")
 	bindVolumeFlags(c)
+	bindForwardFlags(c)
 	c.Flags().StringArrayP("sidecar", "S", nil, "auxiliary command to run in a tmux window (repeatable, format [name:]cmd)")
-	c.Flags().StringArrayP("local-forward", "L", nil, "forward local port to remote address (repeatable, format [bind_address:]port:host:hostport)")
-	c.Flags().StringArrayP("remote-forward", "R", nil, "forward remote port to local address (repeatable, format [bind_address:]port:host:hostport)")
 	c.Flags().Duration("timeout", 0, "stop the session (colab stop) if the command runs longer than this (e.g. 2h)")
 	c.Flags().Bool("no-daemon", false, "run in the foreground and stream the log to this terminal")
 	c.Flags().Bool("persistent", false, "keep the staged copy of the dirs after the run")
@@ -262,19 +260,6 @@ func bindRunFlags(c *cobra.Command) {
 	for _, f := range []string{"id", "staged", "detached"} {
 		_ = c.Flags().MarkHidden(f)
 	}
-	origNorm := c.Flags().GetNormalizeFunc()
-	c.Flags().SetNormalizeFunc(func(f *pflag.FlagSet, name string) pflag.NormalizedName {
-		switch name {
-		case "L":
-			name = "local-forward"
-		case "R":
-			name = "remote-forward"
-		}
-		if origNorm != nil {
-			return origNorm(f, name)
-		}
-		return pflag.NormalizedName(name)
-	})
 }
 
 func isEnvAssign(s string) bool {

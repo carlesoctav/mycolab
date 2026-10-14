@@ -83,3 +83,18 @@ func TestVolumeFlagsPresent(t *testing.T) {
 		}
 	}
 }
+
+func TestForwardFlagsPresent(t *testing.T) {
+	for _, flagName := range []string{"local-forward", "remote-forward"} {
+		f := newCmd.Flags().Lookup(flagName)
+		if f == nil {
+			t.Errorf("newCmd: missing --%s flag", flagName)
+		}
+	}
+	if newCmd.Flags().ShorthandLookup("L") == nil {
+		t.Errorf("newCmd: missing -L shorthand")
+	}
+	if newCmd.Flags().ShorthandLookup("R") == nil {
+		t.Errorf("newCmd: missing -R shorthand")
+	}
+}
