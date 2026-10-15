@@ -102,3 +102,23 @@ func TestInstallerScript(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildInVMSyncScript(t *testing.T) {
+	script, err := BuildInVMSyncScript(map[string]string{
+		"HF_TOKEN": "test_token_123",
+		"TRACKIO":  "https://example.com",
+	})
+	if err != nil {
+		t.Fatalf("BuildInVMSyncScript error: %v", err)
+	}
+
+	for _, want := range []string{
+		"HF_TOKEN", "test_token_123", "TRACKIO", "https://example.com",
+		"/proc/1/environ", "jupyter-server", "SetEnv", "# BEGIN mycolab-env",
+		"'-t'", "pkill", InstallerMarker,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script missing %q", want)
+		}
+	}
+}

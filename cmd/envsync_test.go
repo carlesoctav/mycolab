@@ -72,3 +72,29 @@ func TestParseEnvList(t *testing.T) {
 		t.Errorf("got len %d, want 3", len(m))
 	}
 }
+
+func TestSyncRuntimeEnvOverSSH(t *testing.T) {
+	origRun := runEnvSyncScript
+	defer func() { runEnvSyncScript = origRun }()
+
+	var executedSession string
+	var executedScript string
+	runEnvSyncScript = func(session, script string) ([]byte, error) {
+		executedSession = session
+		executedScript = script
+		return []byte("ENV_SYNC_OK 42\n"), nil
+	}
+
+	t.Setenv("HF_TOKEN", "hf_test_secret_token")
+	syncRuntimeEnv("test-session", true, []string{"EXTRA_VAR=foo"})
+
+	if executedSession != "test-session" {
+		t.Errorf("executedSession = %q, want 'test-session'", executedSession)
+	}
+	if !strings.Contains(executedScript, "hf_test_secret_token") {
+		t.Errorf("executedScript missing local HF_TOKEN: %s", executedScript)
+	}
+	if !strings.Contains(executedScript, "EXTRA_VAR") || !strings.Contains(executedScript, "foo") {
+		t.Errorf("executedScript missing EXTRA_VAR: %s", executedScript)
+	}
+}
