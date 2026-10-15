@@ -1,0 +1,108 @@
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// podmanSetupScript is the bash script that installs and configures rootless podman
+// for use inside Colab runtimes.
+const podmanSetupScript = `set -e
+if command -v podman-colab >/dev/null 2>&1 && command -v podman >/dev/null 2>&1; then
+    echo "PODMAN_ALREADY_INSTALLED"
+    exit 0
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq && apt-get install -y -qq podman fuse-overlayfs slirp4netns uidmap conmon crun iptables
+
+mkdir -p /dev/net
+if [ ! -e /dev/net/tun ]; then
+    mknod /dev/net/tun c 10 200
+    chmod 666 /dev/net/tun
+fi
+
+id colab &>/dev/null || useradd -m -s /bin/bash colab
+grep -q '^colab:100000:' /etc/subuid || echo 'colab:100000:65536' >> /etc/subuid
+grep -q '^colab:100000:' /etc/subgid || echo 'colab:100000:65536' >> /etc/subgid
+mkdir -p /run/user/1001 && chown colab:colab /run/user/1001 && chmod 700 /run/user/1001
+
+cat > /usr/local/bin/crun-noprocpatch <<'EOF'
+#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+bundle = None
+for i, a in enumerate(args):
+    if a == "--bundle" and i + 1 < len(args): bundle = args[i + 1]
+    elif a.startswith("--bundle="): bundle = a.split("=", 1)[1]
+if bundle:
+    p = os.path.join(bundle, "config.json")
+    if os.path.exists(p):
+        try:
+            cfg = json.load(open(p)); changed = False
+            for m in cfg.get("mounts", []):
+                d = m.get("destination", "")
+                if d == "/proc" and m.get("type") == "proc":
+                    m.clear(); m.update({"destination": "/proc", "type": "bind", "source": "/proc", "options": ["rbind", "nosuid", "nodev", "noexec", "relatime"]}); changed = True
+                elif d == "/sys" and m.get("type") == "sysfs":
+                    m.clear(); m.update({"destination": "/sys", "type": "bind", "source": "/sys", "options": ["rbind", "ro", "nosuid", "nodev", "noexec", "relatime"]}); changed = True
+            if changed: json.dump(cfg, open(p, "w"))
+        except Exception: pass
+os.execv("/usr/bin/crun", ["crun"] + args)
+EOF
+chmod +x /usr/local/bin/crun-noprocpatch
+
+su - colab -c 'mkdir -p ~/.config/containers && printf "[containers]\ncgroups = \"disabled\"\ndefault_sysctls = []\n[engine]\nevents_logger = \"file\"\nruntime = \"crun\"\n[engine.runtimes]\ncrun = [\"/usr/local/bin/crun-noprocpatch\"]\n" > ~/.config/containers/containers.conf && printf "[storage]\ndriver = \"vfs\"\n" > ~/.config/containers/storage.conf'
+
+cat > /usr/local/bin/podman-colab <<'EOF'
+#!/bin/bash
+printf -v args '%q ' "$@"
+exec su - colab -c "export XDG_RUNTIME_DIR=/run/user/1001; exec /usr/bin/podman $args"
+EOF
+chmod +x /usr/local/bin/podman-colab
+ln -sf /usr/local/bin/podman-colab /usr/local/bin/podman
+echo "PODMAN_OK"
+`
+
+// runPodmanSetup executes podmanSetupScript over SSH. Stubbable for tests.
+var runPodmanSetup = func(session, script string) ([]byte, error) {
+	sshBin, err := findSSH()
+	if err != nil {
+		return nil, fmt.Errorf("ssh binary not found in PATH")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	var args []string
+	if alt := os.Getenv("MYCOLAB_SSH_CONFIG"); alt != "" {
+		args = append(args, "-F", alt)
+	}
+	args = append(args, session, "bash -s")
+	c := exec.CommandContext(ctx, sshBin, args...)
+	c.Stdin = strings.NewReader(script)
+	return c.CombinedOutput()
+}
+
+// pushPodman installs and configures rootless podman on the runtime.
+// Best-effort by design: failures warn, never fail prepare or new.
+func pushPodman(session string, sessionKnown bool) {
+	if !sessionKnown {
+		fmt.Printf("Note: session %q does not exist yet; skipping podman install.\n", session)
+		return
+	}
+	out, err := runPodmanSetup(session, podmanSetupScript)
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			fmt.Printf("Note: podman install failed (%v). Output:\n%s\n", err, msg)
+		} else {
+			fmt.Printf("Note: podman install failed (%v).\n", err)
+		}
+		return
+	}
+	fmt.Println("Podman ready on runtime.")
+}

@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestUpsertSessionHostEmpty(t *testing.T) {
@@ -206,3 +208,18 @@ func TestPruneStaleHostsRemovesOldForm(t *testing.T) {
 		t.Errorf("old-form stale host not pruned:\n%s", updated)
 	}
 }
+
+func TestBindSSHSetupFlagsDefaults(t *testing.T) {
+	c := &cobra.Command{Use: "test"}
+	bindSSHSetupFlags(c)
+	for _, name := range sshSetupFlagNames {
+		f := c.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("missing flag %s", name)
+		}
+		if f.DefValue != "false" {
+			t.Errorf("flag %s defValue = %s, want false", name, f.DefValue)
+		}
+	}
+}
+

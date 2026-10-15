@@ -48,7 +48,9 @@ installed into sshd so ssh sessions see the same accelerators as the
 console (--no-env-sync skips this), localhost is pinned to IPv4 in
 /etc/hosts (--no-hosts-fix skips this), terminal terminfo (xterm-ghostty)
 is synced (--no-terminfo skips this), and base CLI tools (fd, rg, jq,
-nvim) are installed via apt (--no-tools skips this). Re-running after switching
+nfs-common) are installed via apt (--no-tools skips this), and rootless podman
+is configured for container workflows (--no-podman skips this; --no-all skips all runtime push steps).
+Re-running after switching
 profiles closes the stale multiplex master so the next connect dials the
 new runtime.
 Your main ~/.ssh/config must contain
@@ -146,22 +148,26 @@ func runSSHSetup(cmd *cobra.Command, sessionName string) error {
 	if err := verifyManagedHost(sessionName, sessionName); err != nil {
 		return err
 	}
-	if noTmux, _ := cmd.Flags().GetBool("no-tmux-sync"); !noTmux {
+	noAll, _ := cmd.Flags().GetBool("no-all")
+	if noTmux, _ := cmd.Flags().GetBool("no-tmux-sync"); !noTmux && !noAll {
 		pushTmuxConf(sessionName, known)
 	}
-	if noTerminfo, _ := cmd.Flags().GetBool("no-terminfo"); !noTerminfo {
+	if noTerminfo, _ := cmd.Flags().GetBool("no-terminfo"); !noTerminfo && !noAll {
 		pushTerminfo(sessionName, known)
 	}
-	if noEnv, _ := cmd.Flags().GetBool("no-env-sync"); !noEnv {
+	if noEnv, _ := cmd.Flags().GetBool("no-env-sync"); !noEnv && !noAll {
 		envs, _ := cmd.Flags().GetStringArray("env")
 		syncRuntimeEnv(sessionName, known, envs)
 	}
-	if noHosts, _ := cmd.Flags().GetBool("no-hosts-fix"); !noHosts {
+	if noHosts, _ := cmd.Flags().GetBool("no-hosts-fix"); !noHosts && !noAll {
 		pushLocalhostFix(sessionName, known)
 	}
-	if noTools, _ := cmd.Flags().GetBool("no-tools"); !noTools {
+	if noTools, _ := cmd.Flags().GetBool("no-tools"); !noTools && !noAll {
 		pushBaseTools(sessionName, known)
 		pushRunTools(sessionName, known)
+	}
+	if noPodman, _ := cmd.Flags().GetBool("no-podman"); !noPodman && !noAll {
+		pushPodman(sessionName, known)
 	}
 	fmt.Printf("Connect with `ssh %s`.\n", sessionName)
 	return nil
@@ -565,7 +571,7 @@ func init() {
 }
 
 // sshSetupFlagNames lists the opt-out flags bound by bindSSHSetupFlags.
-var sshSetupFlagNames = []string{"no-prune", "no-tmux-sync", "no-terminfo", "no-env-sync", "no-hosts-fix", "no-tools"}
+var sshSetupFlagNames = []string{"no-prune", "no-tmux-sync", "no-terminfo", "no-env-sync", "no-hosts-fix", "no-tools", "no-podman", "no-all"}
 
 // bindSSHSetupFlags registers the ssh-setup opt-out flags on c. The same
 // set is offered by 'mycolab new' (which runs the ssh setup after creating
@@ -578,4 +584,6 @@ func bindSSHSetupFlags(c *cobra.Command) {
 	c.Flags().Bool("no-env-sync", false, "skip syncing the runtime kernel env into sshd for ssh sessions")
 	c.Flags().Bool("no-hosts-fix", false, "skip pinning localhost to IPv4 in the runtime /etc/hosts")
 	c.Flags().Bool("no-tools", false, "skip installing base CLI tools (fd, rg, jq, nvim) on the runtime")
+	c.Flags().Bool("no-podman", false, "skip installing podman on the runtime")
+	c.Flags().Bool("no-all", false, "skip all runtime push steps (tmux, terminfo, env, hosts, tools, podman)")
 }

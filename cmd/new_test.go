@@ -41,7 +41,7 @@ func TestSSHSetupFlagsPresent(t *testing.T) {
 		"new":        newCmd,
 		"server new": serverNewCmd,
 	} {
-		for _, f := range []string{"no-prune", "no-tmux-sync", "no-terminfo", "no-env-sync", "no-hosts-fix", "no-tools"} {
+		for _, f := range sshSetupFlagNames {
 			if c.Flags().Lookup(f) == nil {
 				t.Errorf("%s: missing --%s flag", name, f)
 			}
@@ -64,9 +64,17 @@ func TestSSHSetupPassthrough(t *testing.T) {
 	}
 	_ = c.Flags().Set("no-env-sync", "true")
 	_ = c.Flags().Set("no-tools", "true")
+	_ = c.Flags().Set("no-podman", "true")
+	_ = c.Flags().Set("no-all", "true")
 	got := sshSetupPassthrough(c)
-	if len(got) != 2 || got[0] != "--no-env-sync" || got[1] != "--no-tools" {
-		t.Fatalf("sshSetupPassthrough = %v, want [--no-env-sync --no-tools]", got)
+	want := []string{"--no-env-sync", "--no-tools", "--no-podman", "--no-all"}
+	if len(got) != len(want) {
+		t.Fatalf("sshSetupPassthrough = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sshSetupPassthrough = %v, want %v", got, want)
+		}
 	}
 }
 
