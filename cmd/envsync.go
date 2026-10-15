@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,68 +88,59 @@ func runColabForMarkerTimeouts(colabBin, stdin, marker string, timeout time.Dura
 	return last, fmt.Errorf("marker %q not found", marker)
 }
 
-// captureKernelEnv dumps the runtime's kernel env via the exec door.
-func captureKernelEnv(colabBin, session string) (map[string]string, error) {
-	var err error
-	for i := 0; i < colabExecAttempts; i++ {
-		if i > 0 {
-			time.Sleep(colabExecRetryDelay)
-		}
-		var out string
-		out, err = runColab(colabBin, "!env -0 | base64 -w0\n", "exec", "-s", session)
-		if err != nil {
-			continue
-		}
-		var vars map[string]string
-		vars, err = sshenv.DecodeCapture(out)
-		if err == nil {
-			return vars, nil
-		}
+// runEnvSyncScript executes a python script on session over SSH to sync the environment.
+// A variable so tests can stub it.
+var runEnvSyncScript = func(session, script string) ([]byte, error) {
+	sshBin, err := findSSH()
+	if err != nil {
+		return nil, fmt.Errorf("ssh binary not found in PATH")
 	}
-	return nil, err
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var args []string
+	if alt := os.Getenv("MYCOLAB_SSH_CONFIG"); alt != "" {
+		args = append(args, "-F", alt)
+	}
+	args = append(args, session, "python3 -")
+	c := exec.CommandContext(ctx, sshBin, args...)
+	c.Stdin = strings.NewReader(script)
+	return c.CombinedOutput()
 }
 
-// syncRuntimeEnv captures the session runtime's kernel environment (via the
-// exec door, which carries the full container env) and installs it as a
-// managed sshd SetEnv block, so `ssh` sessions see the same accelerators
-// and tools as `colab console` / `colab exec`. Best-effort by design:
+// syncRuntimeEnv captures the session runtime's environment directly from
+// /proc/1/environ and jupyter-server over SSH, merges custom and local env vars
+// (such as HF_TOKEN), and installs them as a managed sshd SetEnv block, so
+// `ssh` sessions see accelerators and tokens. Best-effort by design:
 // failures warn, never fail `mycolab new`.
 func syncRuntimeEnv(session string, sessionKnown bool, extraEnvs []string) {
 	if !sessionKnown {
 		fmt.Printf("Note: session %q does not exist yet; skipping env sync.\n", session)
 		return
 	}
-	colabBin, err := exec.LookPath("colab")
-	if err != nil {
-		fmt.Println("Note: skipping env sync (colab binary not found).")
-		return
-	}
-	vars, err := captureKernelEnv(colabBin, session)
-	if err != nil {
-		fmt.Printf("Note: env capture failed after %d attempts (%v); ssh sessions keep the bare sshd env.\n", colabExecAttempts, err)
-		return
-	}
-	kept := map[string]string{}
-	for k, v := range vars {
-		if !sshenv.Denied(k) {
-			kept[k] = v
-		}
-	}
 	custom, err := profile.CustomEnv()
 	if err != nil {
 		fmt.Printf("Note: could not read custom env (%v).\n", err)
-		custom = nil
+		custom = map[string]string{}
+	}
+	if custom == nil {
+		custom = map[string]string{}
+	}
+	if hfToken := os.Getenv("HF_TOKEN"); hfToken != "" {
+		custom["HF_TOKEN"] = hfToken
+	}
+
+	toSync := make(map[string]string)
+	for k, v := range custom {
+		toSync[k] = v
 	}
 	if len(custom) > 0 {
-		for k, v := range custom {
-			kept[k] = v
-		}
 		fmt.Printf("sync %d custom env: %s\n", len(custom), strings.Join(profile.CustomEnvNames(custom), ", "))
 	}
 	local := parseEnvList(extraEnvs)
 	if len(local) > 0 {
 		for k, v := range local {
-			kept[k] = v
+			toSync[k] = v
 		}
 		localNames := make([]string, 0, len(local))
 		for k := range local {
@@ -158,46 +149,42 @@ func syncRuntimeEnv(session string, sessionKnown bool, extraEnvs []string) {
 		sort.Strings(localNames)
 		fmt.Printf("sync %d local env: %s\n", len(local), strings.Join(localNames, ", "))
 	}
-	directive, skipped := sshenv.RenderSetEnv(kept)
-	if directive == "" {
-		fmt.Println("Note: no env vars to sync after filtering.")
-		return
-	}
-	dir, err := os.MkdirTemp("", "mycolab-env")
+
+	script, err := sshenv.BuildInVMSyncScript(toSync)
 	if err != nil {
-		fmt.Printf("Note: env sync failed staging files (%v).\n", err)
+		fmt.Printf("Note: failed to generate env sync script (%v).\n", err)
 		return
 	}
-	defer os.RemoveAll(dir)
-	blockPath := filepath.Join(dir, "setenv_block")
-	instPath := filepath.Join(dir, "sshd_install.sh")
-	if err := os.WriteFile(blockPath, []byte(directive+"\n"), 0o644); err != nil {
-		fmt.Printf("Note: env sync failed staging files (%v).\n", err)
+
+	out, err := runEnvSyncScript(session, script)
+	if err != nil || !strings.Contains(string(out), sshenv.InstallerMarker) {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			fmt.Printf("Note: env sync failed (%v). Output:\n%s\n", err, msg)
+		} else {
+			fmt.Printf("Note: env sync failed (%v).\n", err)
+		}
 		return
 	}
-	if err := os.WriteFile(instPath, []byte(sshenv.InstallerScript), 0o644); err != nil {
-		fmt.Printf("Note: env sync failed staging files (%v).\n", err)
-		return
+
+	count := len(toSync)
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, sshenv.InstallerMarker) {
+			fields := strings.Fields(line)
+			if len(fields) > 1 {
+				if n, err := strconv.Atoi(fields[1]); err == nil {
+					count = n
+				}
+			}
+			break
+		}
 	}
-	if _, err := runColab(colabBin, "", "upload", "-s", session, blockPath, sshenv.RemoteBlockPath); err != nil {
-		fmt.Printf("Note: env block upload failed (%v).\n", err)
-		return
-	}
-	if _, err := runColab(colabBin, "", "upload", "-s", session, instPath, sshenv.RemoteInstallerPath); err != nil {
-		fmt.Printf("Note: env installer upload failed (%v).\n", err)
-		return
-	}
-	instOut, err := runColabForMarker(colabBin, "!bash "+sshenv.RemoteInstallerPath+"\n", sshenv.InstallerMarker, "exec", "-s", session)
-	if err != nil {
-		fmt.Printf("Note: env install failed (%v). Last output:\n%s\n", err, instOut)
-		return
-	}
-	fmt.Printf("Synced %d env vars to sshd", len(kept)-len(skipped))
-	if len(skipped) > 0 {
-		fmt.Printf(" (%d skipped: newline values)", len(skipped))
-	}
-	fmt.Printf("; reconnect `ssh %s` to pick them up.\n", session)
+
+	fmt.Printf("Synced %d env vars to sshd; reconnect `ssh %s` to pick them up.\n", count, session)
+	dropMaster(session)
 }
+
 
 // parseEnvList parses KEY=VAL or KEY (looked up in local env) entries.
 func parseEnvList(entries []string) map[string]string {

@@ -6,6 +6,7 @@ package sshenv
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -197,3 +198,130 @@ fi
 pkill -HUP -f 'sshd.*\[listener\]'
 echo ENV_SYNC_OK
 `
+
+// BuildInVMSyncScript returns a Python script that runs directly on the runtime over SSH.
+// It captures the container environment from /proc/1/environ (and jupyter-server),
+// filters denied variables, merges customVars (like HF_TOKEN), writes the SetEnv directive
+// into /etc/ssh/sshd_config, validates with sshd -t, and reloads the sshd listener.
+func BuildInVMSyncScript(customVars map[string]string) (string, error) {
+	if customVars == nil {
+		customVars = map[string]string{}
+	}
+	payload, err := json.Marshal(customVars)
+	if err != nil {
+		return "", fmt.Errorf("marshal custom vars: %w", err)
+	}
+
+	deniedList := make([]string, 0, len(deniedExact))
+	for k := range deniedExact {
+		deniedList = append(deniedList, k)
+	}
+	sort.Strings(deniedList)
+	deniedJSON, _ := json.Marshal(deniedList)
+
+	script := fmt.Sprintf(`import sys, os, subprocess, json
+
+denied = set(json.loads(%q))
+
+def is_denied(k):
+    return k in denied or k.startswith('SSH_')
+
+env = {}
+# Capture from /proc/1/environ (container init)
+for path in ['/proc/1/environ']:
+    if os.path.exists(path):
+        try:
+            with open(path, 'rb') as f:
+                for item in f.read().split(b'\x00'):
+                    if b'=' in item:
+                        k, v = item.decode('utf-8', errors='ignore').split('=', 1)
+                        if not is_denied(k):
+                            env[k] = v
+        except Exception:
+            pass
+
+# Also capture from jupyter-server if present (adds COLAB_GPU=1 etc.)
+try:
+    pids = subprocess.check_output(['pgrep', '-f', 'jupyter-server']).decode().split()
+    for pid in pids:
+        path = f'/proc/{pid}/environ'
+        if os.path.exists(path):
+            with open(path, 'rb') as f:
+                for item in f.read().split(b'\x00'):
+                    if b'=' in item:
+                        k, v = item.decode('utf-8', errors='ignore').split('=', 1)
+                        if not is_denied(k):
+                            env[k] = v
+except Exception:
+    pass
+
+# Merge custom/local variables (e.g. HF_TOKEN)
+custom = json.loads(%q)
+for k, v in custom.items():
+    if not is_denied(k):
+        env[k] = v
+
+pairs = []
+for k in sorted(env.keys()):
+    val = env[k]
+    if '\n' in val:
+        continue
+    val_escaped = val.replace('\\', '\\\\').replace('"', '\\"')
+    pairs.append(f'{k}="{val_escaped}"')
+
+if not pairs:
+    print("NO_ENV_VARS")
+    sys.exit(0)
+
+setenv_line = 'SetEnv ' + ' '.join(pairs)
+conf_path = '/etc/ssh/sshd_config'
+backup_path = '/tmp/sshd_config.bak.mycolab'
+
+try:
+    with open(conf_path, 'r') as f:
+        content = f.read()
+except Exception as e:
+    print(f"FAILED_READ_CONF: {e}")
+    sys.exit(1)
+
+with open(backup_path, 'w') as f:
+    f.write(content)
+
+start = "# BEGIN mycolab-env"
+end = "# END mycolab-env"
+lines = []
+skip = False
+for line in content.split('\n'):
+    if line.startswith(start):
+        skip = True
+        continue
+    if line.startswith(end):
+        skip = False
+        continue
+    if not skip:
+        lines.append(line)
+
+new_content = '\n'.join(lines).rstrip('\n') + f'\n{start} (managed by mycolab; do not edit)\n{setenv_line}\n{end}\n'
+test_conf = '/tmp/sshd_config.test'
+with open(test_conf, 'w') as f:
+    f.write(new_content)
+
+test_res = subprocess.run(['sshd', '-t', '-f', test_conf], capture_output=True, text=True)
+if test_res.returncode != 0:
+    print(f"INVALID_CONFIG: {test_res.stderr}")
+    sys.exit(1)
+
+with open(conf_path, 'w') as f:
+    f.write(new_content)
+
+# SIGHUP listener so new connections get the updated SetEnv
+if subprocess.run(['pgrep', '-f', 'sshd.*\\[listener\\]'], capture_output=True).returncode == 0:
+    subprocess.run(['pkill', '-HUP', '-f', 'sshd.*\\[listener\\]'])
+else:
+    subprocess.run(['pkill', '-HUP', '-x', 'sshd'])
+
+print(f"%s {len(pairs)}")
+`, string(deniedJSON), string(payload), InstallerMarker)
+
+	return script, nil
+}
