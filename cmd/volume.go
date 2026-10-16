@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/carlesoctav/mycolab/pkg/tools"
 	"github.com/spf13/cobra"
 )
 
@@ -90,6 +91,12 @@ var runSessionCommand = func(session, script string) ([]byte, error) {
 
 // mountVolumes mounts the requested volumes on session over SSH and validates success.
 func mountVolumes(session string, mounts []mountSpec) error {
+	if len(mounts) == 0 {
+		return nil
+	}
+	if err := ensureHfMount(session); err != nil {
+		return err
+	}
 	for _, m := range mounts {
 		fmt.Printf("Mounting HF bucket %s at %s...\n", m.Bucket, m.Remote)
 		out, err := runSessionCommand(session, m.mountScript())
@@ -101,6 +108,19 @@ func mountVolumes(session string, mounts []mountSpec) error {
 			return fmt.Errorf("mount %s at %s failed: %w", m.Bucket, m.Remote, err)
 		}
 		fmt.Printf("Mounted %s at %s.\n", m.Bucket, m.Remote)
+	}
+	return nil
+}
+
+func ensureHfMount(session string) error {
+	checkAndInstall := fmt.Sprintf("command -v hf-mount >/dev/null 2>&1 || (%s)", tools.HfMount.InstallCmd)
+	out, err := runSessionCommand(session, checkAndInstall)
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("install hf-mount failed: %w (output: %s)", err, msg)
+		}
+		return fmt.Errorf("install hf-mount failed: %w", err)
 	}
 	return nil
 }

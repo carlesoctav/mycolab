@@ -64,10 +64,10 @@ func TestSSHSetupPassthrough(t *testing.T) {
 	}
 	_ = c.Flags().Set("no-env-sync", "true")
 	_ = c.Flags().Set("no-tools", "true")
-	_ = c.Flags().Set("no-podman", "true")
+	_ = c.Flags().Set("podman", "true")
 	_ = c.Flags().Set("no-all", "true")
 	got := sshSetupPassthrough(c)
-	want := []string{"--no-env-sync", "--no-tools", "--no-podman", "--no-all"}
+	want := []string{"--no-env-sync", "--no-tools", "--podman", "--no-all"}
 	if len(got) != len(want) {
 		t.Fatalf("sshSetupPassthrough = %v, want %v", got, want)
 	}

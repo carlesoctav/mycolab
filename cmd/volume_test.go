@@ -115,6 +115,13 @@ func TestMountVolumes(t *testing.T) {
 		return []byte("mounted ok"), nil
 	}
 
+	if err := mountVolumes("test-session", nil); err != nil {
+		t.Fatalf("mountVolumes(empty) failed: %v", err)
+	}
+	if len(executed) != 0 {
+		t.Fatalf("executed %d commands for empty mounts, want 0", len(executed))
+	}
+
 	mounts := []mountSpec{
 		{Bucket: "user/b1", Remote: "/content/b1", ReadOnly: false},
 		{Bucket: "user/b2", Remote: "/content/b2", ReadOnly: true},
@@ -124,14 +131,17 @@ func TestMountVolumes(t *testing.T) {
 		t.Fatalf("mountVolumes failed: %v", err)
 	}
 
-	if len(executed) != 2 {
-		t.Fatalf("executed %d commands, want 2", len(executed))
+	if len(executed) != 3 {
+		t.Fatalf("executed %d commands, want 3", len(executed))
 	}
-	if !strings.HasPrefix(executed[0], "test-session:mkdir -p '/content/b1'") || strings.Contains(executed[0], "--read-only") {
+	if !strings.Contains(executed[0], "hf-mount") {
 		t.Errorf("command 0 unexpected: %s", executed[0])
 	}
-	if !strings.HasPrefix(executed[1], "test-session:mkdir -p '/content/b2'") || !strings.Contains(executed[1], "--read-only") {
+	if !strings.HasPrefix(executed[1], "test-session:mkdir -p '/content/b1'") || strings.Contains(executed[1], "--read-only") {
 		t.Errorf("command 1 unexpected: %s", executed[1])
+	}
+	if !strings.HasPrefix(executed[2], "test-session:mkdir -p '/content/b2'") || !strings.Contains(executed[2], "--read-only") {
+		t.Errorf("command 2 unexpected: %s", executed[2])
 	}
 
 	// Test error handling

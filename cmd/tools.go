@@ -25,7 +25,7 @@ const (
 // fdfind is aliased to fd, and nvim itself is executed as a final gate
 // before the marker.
 func toolsInstallStdin() string {
-	return "!(command -v rg && command -v jq && command -v nvim && (command -v fd || command -v fdfind) && command -v mount.nfs && command -v tmux) >/dev/null 2>&1 || " +
+	return "(command -v rg && command -v jq && command -v nvim && (command -v fd || command -v fdfind) && command -v mount.nfs && command -v tmux) >/dev/null 2>&1 || " +
 		"(apt-get update -qq && " +
 		"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl fd-find ripgrep jq nfs-common tmux && " +
 		"(DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libfuse2 || true) && " +

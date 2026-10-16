@@ -182,7 +182,6 @@ func syncRuntimeEnv(session string, sessionKnown bool, extraEnvs []string) {
 	}
 
 	fmt.Printf("Synced %d env vars to sshd; reconnect `ssh %s` to pick them up.\n", count, session)
-	dropMaster(session)
 }
 
 

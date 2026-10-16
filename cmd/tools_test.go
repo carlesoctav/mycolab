@@ -7,8 +7,8 @@ import (
 
 func TestToolsInstallStdin(t *testing.T) {
 	stdin := toolsInstallStdin()
-	if !strings.HasPrefix(stdin, "!(") {
-		t.Errorf("stdin %q: want `!(...)` shell form", stdin[:20])
+	if !strings.HasPrefix(stdin, "(") || strings.HasPrefix(stdin, "!(") {
+		t.Errorf("stdin %q: want `(...)` shell form", stdin[:20])
 	}
 	if !strings.HasSuffix(stdin, "&& echo "+toolsMarker+"\n") {
 		t.Errorf("stdin missing marker suffix:\n%s", stdin)
