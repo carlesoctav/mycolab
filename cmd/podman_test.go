@@ -9,14 +9,13 @@ import (
 func TestPodmanSetupScriptContent(t *testing.T) {
 	for _, want := range []string{
 		"apt-get install -y -qq podman",
-		"fuse-overlayfs slirp4netns uidmap conmon crun iptables",
+		"fuse-overlayfs slirp4netns uidmap conmon crun iptables curl",
 		"/dev/net/tun",
 		"useradd -m -s /bin/bash colab",
-		"crun-noprocpatch",
-		`ln -sf /usr/local/bin/podman-colab /usr/local/bin/podman`,
-		`/usr/bin/podman $args`,
-		`cgroups = \"disabled\"`,
-		`driver = \"vfs\"`,
+		"docker-compose",
+		`mount_program = \"/usr/bin/fuse-overlayfs\"`,
+		`cgroups = \"enabled\"`,
+		`driver = \"overlay\"`,
 		"PODMAN_ALREADY_INSTALLED",
 		"PODMAN_OK",
 	} {
@@ -26,9 +25,9 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 	}
 
 	// Crucial: wrapper must call /usr/bin/podman, NOT bare podman,
-	// to prevent infinite recursion via /usr/local/bin/podman symlink.
-	if strings.Contains(podmanSetupScript, "exec /usr/local/bin/podman $args") ||
-		strings.Contains(podmanSetupScript, `exec su - colab -c "export XDG_RUNTIME_DIR=/run/user/1001; exec podman $args"`) {
+	// to prevent infinite recursion via /usr/local/bin/podman.
+	if strings.Contains(podmanSetupScript, "exec /usr/local/bin/podman") ||
+		strings.Contains(podmanSetupScript, "exec podman") {
 		t.Errorf("podmanSetupScript must not call bare podman or /usr/local/bin/podman in wrapper")
 	}
 }

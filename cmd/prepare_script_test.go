@@ -14,12 +14,12 @@ func TestRenderPrepareScript(t *testing.T) {
 		"command -v rg",
 		"curl fd-find ripgrep jq nfs-common tmux libfuse2",
 		nvimAppImageURL,
-		"podman fuse-overlayfs slirp4netns uidmap conmon crun iptables",
+		"podman fuse-overlayfs slirp4netns uidmap conmon crun iptables curl",
 		"useradd -m -s /bin/bash colab",
 		"/dev/net/tun",
-		"crun-noprocpatch",
-		"podman-colab",
-		"ln -sf /usr/local/bin/podman-colab /usr/local/bin/podman",
+		"docker-compose",
+		`mount_program = \"/usr/bin/fuse-overlayfs\"`,
+		`/usr/bin/podman "$@"`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("renderPrepareScript missing %q", want)

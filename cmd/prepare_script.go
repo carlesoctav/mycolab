@@ -108,7 +108,7 @@ fi
 
 need_podman=false
 if [ "$with_podman" = "true" ]; then
-    if ! (command -v podman-colab >/dev/null 2>&1 && command -v podman >/dev/null 2>&1); then
+    if ! (command -v podman >/dev/null 2>&1 && [ -f /usr/local/bin/docker-compose ]); then
         need_podman=true
     fi
 fi
@@ -120,7 +120,7 @@ if [ "$need_base" = "true" ] || [ "$need_podman" = "true" ]; then
         APT_PKGS="$APT_PKGS curl fd-find ripgrep jq nfs-common tmux libfuse2"
     fi
     if [ "$need_podman" = "true" ]; then
-        APT_PKGS="$APT_PKGS podman fuse-overlayfs slirp4netns uidmap conmon crun iptables"
+        APT_PKGS="$APT_PKGS podman fuse-overlayfs slirp4netns uidmap conmon crun iptables curl"
     fi
     apt-get update -qq && apt-get install -y -qq $APT_PKGS
 fi
@@ -133,51 +133,59 @@ fi
 
 if [ "$with_podman" = "true" ]; then
     if [ "$need_podman" = "true" ]; then
-        mkdir -p /dev/net
-        if [ ! -e /dev/net/tun ]; then
-            mknod /dev/net/tun c 10 200
-            chmod 666 /dev/net/tun
-        fi
-
+        mkdir -p /dev/net; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200; chmod 666 /dev/net/tun
+        chmod 666 /dev/fuse 2>/dev/null || true
         id colab &>/dev/null || useradd -m -s /bin/bash colab
         grep -q '^colab:100000:' /etc/subuid || echo 'colab:100000:65536' >> /etc/subuid
         grep -q '^colab:100000:' /etc/subgid || echo 'colab:100000:65536' >> /etc/subgid
-        mkdir -p /run/user/1001 && chown colab:colab /run/user/1001 && chmod 700 /run/user/1001
+        mkdir -p /run/user/1001/podman && chown -R colab:colab /run/user/1001 && chmod 700 /run/user/1001
 
-        cat > /usr/local/bin/crun-noprocpatch <<'EOF'
-#!/usr/bin/env python3
-import json, os, sys
-args = sys.argv[1:]
-bundle = None
-for i, a in enumerate(args):
-    if a == "--bundle" and i + 1 < len(args): bundle = args[i + 1]
-    elif a.startswith("--bundle="): bundle = a.split("=", 1)[1]
-if bundle:
-    p = os.path.join(bundle, "config.json")
-    if os.path.exists(p):
-        try:
-            cfg = json.load(open(p)); changed = False
-            for m in cfg.get("mounts", []):
-                d = m.get("destination", "")
-                if d == "/proc" and m.get("type") == "proc":
-                    m.clear(); m.update({"destination": "/proc", "type": "bind", "source": "/proc", "options": ["rbind", "nosuid", "nodev", "noexec", "relatime"]}); changed = True
-                elif d == "/sys" and m.get("type") == "sysfs":
-                    m.clear(); m.update({"destination": "/sys", "type": "bind", "source": "/sys", "options": ["rbind", "ro", "nosuid", "nodev", "noexec", "relatime"]}); changed = True
-            if changed: json.dump(cfg, open(p, "w"))
-        except Exception: pass
-os.execv("/usr/bin/crun", ["crun"] + args)
-EOF
-        chmod +x /usr/local/bin/crun-noprocpatch
+        rm -f /usr/local/bin/crun-noprocpatch
+        su - colab -c 'mkdir -p ~/.config/containers && printf "[containers]\ncgroups = \"enabled\"\ndefault_sysctls = []\nvolumes = [\"/proc:/proc\"]\n[engine]\nevents_logger = \"file\"\nruntime = \"crun\"\ncgroup_manager = \"cgroupfs\"\n" > ~/.config/containers/containers.conf && printf "[storage]\ndriver = \"overlay\"\n[storage.options.overlay]\nmount_program = \"/usr/bin/fuse-overlayfs\"\n" > ~/.config/containers/storage.conf'
 
-        su - colab -c 'mkdir -p ~/.config/containers && printf "[containers]\ncgroups = \"disabled\"\ndefault_sysctls = []\n[engine]\nevents_logger = \"file\"\nruntime = \"crun\"\n[engine.runtimes]\ncrun = [\"/usr/local/bin/crun-noprocpatch\"]\n" > ~/.config/containers/containers.conf && printf "[storage]\ndriver = \"vfs\"\n" > ~/.config/containers/storage.conf'
+        if command -v nvidia-ctk &>/dev/null && [ -d /usr/lib64-nvidia ]; then
+            mkdir -p /etc/cdi
+            nvidia-ctk cdi generate --library-search-path=/usr/lib64-nvidia --output=/etc/cdi/nvidia.yaml 2>/dev/null
+            chmod 644 /etc/cdi/nvidia.yaml
+        fi
 
-        cat > /usr/local/bin/podman-colab <<'EOF'
+        if [ ! -f /usr/local/bin/docker-compose ]; then
+            curl -fsSL -o /usr/local/bin/docker-compose https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64
+            chmod 755 /usr/local/bin/docker-compose
+        fi
+
+        pkill -f 'podman system service' 2>/dev/null || true
+        rm -f /run/user/1001/podman/podman.sock
+        runuser -u colab -- env XDG_RUNTIME_DIR=/run/user/1001 nohup /usr/bin/podman system service --time=0 unix:///run/user/1001/podman/podman.sock >/tmp/podman-service.log 2>&1 &
+
+        chmod 755 /root
+
+        cat > /usr/local/bin/podman <<'INNER_EOF'
 #!/bin/bash
-printf -v args '%q ' "$@"
-exec su - colab -c "export XDG_RUNTIME_DIR=/run/user/1001; exec /usr/bin/podman $args"
-EOF
-        chmod +x /usr/local/bin/podman-colab
-        ln -sf /usr/local/bin/podman-colab /usr/local/bin/podman
+if [ "$(id -u)" -eq 0 ]; then
+    chmod -R a+rX /tmp/tmp* 2>/dev/null || true
+    export XDG_RUNTIME_DIR=/run/user/1001
+    export HOME=/home/colab
+    export USER=colab
+
+    # Auto-restart service if socket is missing or dead
+    if [ ! -S /run/user/1001/podman/podman.sock ] || ! curl -s --unix-socket /run/user/1001/podman/podman.sock http://localhost/_ping &>/dev/null; then
+        mkdir -p /run/user/1001/podman
+        chown -R colab:colab /run/user/1001
+        rm -f /run/user/1001/podman/podman.sock
+        runuser -u colab -- env XDG_RUNTIME_DIR=/run/user/1001 nohup /usr/bin/podman system service --time=0 unix:///run/user/1001/podman/podman.sock >/tmp/podman-service.log 2>&1 &
+        for i in {1..30}; do
+            [ -S /run/user/1001/podman/podman.sock ] && break
+            sleep 0.1
+        done
+    fi
+
+    exec runuser -u colab -- /usr/bin/podman "$@"
+else
+    exec /usr/bin/podman "$@"
+fi
+INNER_EOF
+        chmod +x /usr/local/bin/podman
     fi
 fi
 `)
