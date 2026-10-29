@@ -194,6 +194,7 @@ sync {
     host      = %q,
     targetdir = %q,
     delay     = 1,
+    delete    = false,
 
     exclude = {
 %s

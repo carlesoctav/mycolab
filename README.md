@@ -132,6 +132,7 @@ mycolab sync -s trainer --daemon . /content/my-project
 - If omitted, `local_dir` defaults to `.` and `remote_dir` defaults to `/content/<basename>`.
 - If `-s` is omitted in an interactive terminal, an interactive session picker is shown.
 - Automatically respects `.gitignore` rules (ignores `.git/`, `.venv/`, `__pycache__/`, etc.).
+- Never deletes remote files: downloads, checkpoints, and generated artifacts on the runtime are always preserved.
 - No manual configuration scaffolding required.
 
 ### `mycolab pull`

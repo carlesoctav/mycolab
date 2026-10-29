@@ -207,6 +207,7 @@ sync {
     host      = "{{.Host}}", -- managed by 'mycolab new -s <session>'
     targetdir = "{{.Target}}",
     delay     = 1,
+    delete    = false,
 
     exclude = {
         ".git/",
@@ -218,8 +219,8 @@ sync {
     rsync = {
         archive  = true,
         compress = true,
-        -- NOTE: no 'delete = true' on purpose: files produced remotely
-        -- (checkpoints, logs, results) must survive local syncs.
+        -- NOTE: delete = false above ensures files produced remotely
+        -- (checkpoints, logs, results) survive local syncs.
     },
 }
 `

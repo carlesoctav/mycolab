@@ -19,7 +19,7 @@ Use this skill whenever the user wants Colab GPU work done through mycolab sessi
 
 1. `mycolab new -s <session> [--gpu L4]` — creates the instance. `prepare` runs automatically.
 2. `ssh <session>` — work on it and run programs there.
-3. `mycolab sync <local_dir> <remote_dir>` — mirror the workspace to the session. **Local is the source of truth: always edit locally**, never treat the remote copy as canonical.
+3. `mycolab sync <local_dir> <remote_dir>` — mirror the workspace to the session. **Local is the source of truth: always edit locally**, never treat the remote copy as canonical (sync never deletes remote files, so checkpoints and downloads are preserved).
 4. The live sync also persists the SSH connection (steady tunnel traffic is a keepalive). For anything long-lived, run it inside **tmux on the session** (e.g. under `/content/<dir>`) so it survives disconnects.
 
 ## Flow B — one-shot run (done with dev)
