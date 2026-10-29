@@ -168,6 +168,23 @@ if [ "$(id -u)" -eq 0 ]; then
     export HOME=/home/colab
     export USER=colab
 
+    # Ensure host destination is writable by colab for podman cp
+    for arg in "$@"; do
+        if [ "$arg" = "cp" ]; then
+            dest="${@: -1}"
+            if [ "$dest" != "-" ] && [[ "$dest" != *:* ]]; then
+                dest_dir="$dest"
+                [ ! -d "$dest_dir" ] && dest_dir="$(dirname "$dest")"
+                mkdir -p "$dest_dir" 2>/dev/null || true
+                chown -R colab:colab "$dest_dir" 2>/dev/null || true
+                chmod -R a+rwx "$dest_dir" 2>/dev/null || true
+                [ -f "$dest" ] && chown colab:colab "$dest" 2>/dev/null || true
+                [ -f "$dest" ] && chmod a+rw "$dest" 2>/dev/null || true
+            fi
+            break
+        fi
+    done
+
     # Auto-restart service if socket is missing or dead
     if [ ! -S /run/user/1001/podman/podman.sock ] || ! curl -s --unix-socket /run/user/1001/podman/podman.sock http://localhost/_ping &>/dev/null; then
         mkdir -p /run/user/1001/podman
@@ -186,6 +203,10 @@ else
 fi
 INNER_EOF
         chmod +x /usr/local/bin/podman
+        if ! grep -q "docker.io" /etc/containers/registries.conf 2>/dev/null; then
+            echo "unqualified-search-registries = [\"docker.io\"]" >> /etc/containers/registries.conf
+        fi
+        ln -sf /usr/local/bin/podman /usr/local/bin/docker
     fi
 fi
 `)

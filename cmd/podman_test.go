@@ -16,6 +16,9 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 		`mount_program = \"/usr/bin/fuse-overlayfs\"`,
 		`cgroups = \"enabled\"`,
 		`driver = \"overlay\"`,
+		`unqualified-search-registries = [\"docker.io\"]`,
+		"ln -sf /usr/local/bin/podman /usr/local/bin/docker",
+		`chown -R colab:colab "$dest_dir"`,
 		"PODMAN_ALREADY_INSTALLED",
 		"PODMAN_OK",
 	} {

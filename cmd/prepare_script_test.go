@@ -19,6 +19,9 @@ func TestRenderPrepareScript(t *testing.T) {
 		"/dev/net/tun",
 		"docker-compose",
 		`mount_program = \"/usr/bin/fuse-overlayfs\"`,
+		`unqualified-search-registries = [\"docker.io\"]`,
+		"ln -sf /usr/local/bin/podman /usr/local/bin/docker",
+		`chown -R colab:colab "$dest_dir"`,
 		`/usr/bin/podman "$@"`,
 	} {
 		if !strings.Contains(s, want) {
