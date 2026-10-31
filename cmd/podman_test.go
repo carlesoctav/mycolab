@@ -18,6 +18,7 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 		`driver = \"overlay\"`,
 		`unqualified-search-registries = [\"docker.io\"]`,
 		"ln -sf /usr/local/bin/podman /usr/local/bin/docker",
+		"ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock",
 		`chown -R colab:colab "$dest_dir"`,
 		"PODMAN_ALREADY_INSTALLED",
 		"PODMAN_OK",

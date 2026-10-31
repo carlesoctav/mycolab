@@ -195,6 +195,7 @@ if [ "$(id -u)" -eq 0 ]; then
             [ -S /run/user/1001/podman/podman.sock ] && break
             sleep 0.1
         done
+        ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
     fi
 
     exec runuser -u colab -- /usr/bin/podman "$@"
@@ -207,6 +208,7 @@ INNER_EOF
             echo "unqualified-search-registries = [\"docker.io\"]" >> /etc/containers/registries.conf
         fi
         ln -sf /usr/local/bin/podman /usr/local/bin/docker
+        ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
     fi
 fi
 `)

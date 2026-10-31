@@ -218,7 +218,7 @@ Colab allows a single concurrent proxy connection per runtime. Each managed entr
 - **Tmux config sync**: Pushes the bundled `tmux.conf` to `/root/.tmux.conf` on the runtime (best-effort; `--no-tmux-sync` skips it), keeping keybindings and status bar consistent.
 - **Terminal terminfo sync**: Pushes and compiles terminal terminfo definitions (`xterm-ghostty` and local `$TERM`) on the runtime so tools like `tmux`, `htop`, and `nano` work seamlessly over SSH without "missing or unsuitable terminal" errors (`--no-terminfo` skips it).
 - **Base CLI tools**: Installs `fd`, `rg`, and `jq` via apt, plus the latest stable Neovim as an AppImage in `/usr/local/bin` (`--no-tools` skips it). Re-runs are a no-op when already present.
-- **Podman container runtime**: Configures rootless Podman with `fuse-overlayfs`, Docker Compose v2, background socket service, GPU CDI support, and user mappings so container workflows (`podman`, `podman compose`) can run inside Colab without root cgroup errors (`--podman` enables this; skipped by default).
+- **Podman container runtime**: Configures rootless Podman with `fuse-overlayfs`, Docker Compose v2, background socket service, `/var/run/docker.sock` symlink for Docker SDK compatibility, GPU CDI support, and user mappings so container workflows (`podman`, `podman compose`, `docker`) can run inside Colab without root cgroup errors (`--podman` enables this; skipped by default).
 - **Skip all push steps**: `--no-all` skips all runtime push steps (`tmux`, `terminfo`, `env`, `hosts`, `tools`) in one flag.
 - **Volume mounts**: Mounts Hugging Face Storage Buckets via `hf-mount --fuse` automatically upon runtime setup using `-v / --volume <bucket>:<remote>[:ro]` (repeatable; uses `HF_TOKEN` from `mycolab env`).
 
