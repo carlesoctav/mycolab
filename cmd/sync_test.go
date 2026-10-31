@@ -174,6 +174,7 @@ func TestRenderLsyncdConfigAndExcludes(t *testing.T) {
 		`host      = "trainer"`,
 		`targetdir = "/content/proj"`,
 		`delete    = false,`,
+		`_extra   = { "--copy-links" },`,
 		`"data/",`,
 		`"*.pt",`,
 		`nodaemon   = true,`,

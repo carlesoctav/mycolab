@@ -203,6 +203,7 @@ sync {
     rsync = {
         archive  = true,
         compress = true,
+        _extra   = { "--copy-links" },
     },
 }
 `, slug, sessionName, slug, sessionName, slug, sessionName, nodaemonStr, sourceDir, sessionName, targetDir, strings.Join(exclLines, "\n"))

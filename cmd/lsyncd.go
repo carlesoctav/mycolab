@@ -219,6 +219,7 @@ sync {
     rsync = {
         archive  = true,
         compress = true,
+        _extra   = { "--copy-links" },
         -- NOTE: delete = false above ensures files produced remotely
         -- (checkpoints, logs, results) survive local syncs.
     },

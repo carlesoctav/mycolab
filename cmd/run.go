@@ -513,7 +513,7 @@ func runPipeline(cmd *cobra.Command, j *job, out io.Writer, logf func(string, ..
 	}
 	for _, d := range j.Dirs {
 		logf("copying %s -> %s:%s", d.Local, j.Session, d.Remote)
-		args := append([]string{"-az"}, rsyncIgnoreFilters(d.Local)...)
+		args := append([]string{"-az", "--copy-links"}, rsyncIgnoreFilters(d.Local)...)
 		args = append(args, "-e", "ssh",
 			"--rsync-path", "mkdir -p "+shellQuote(d.Remote)+" && rsync",
 			strings.TrimRight(d.Local, "/")+"/", j.Session+":"+d.Remote+"/")

@@ -37,6 +37,7 @@ func TestScaffoldLsyncd(t *testing.T) {
 		`host      = "trainer"`,
 		`targetdir = "` + target + `"`,
 		`delete    = false,`,
+		`_extra   = { "--copy-links" },`,
 		`"/tmp/lsyncd-` + slugify(filepath.Base(dir)) + `-trainer`,
 		`mycolab sync trainer.conf.lua`,
 		`".git/"`,

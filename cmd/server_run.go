@@ -66,7 +66,7 @@ session (colab stop, on the server) if the command overruns.`,
 			for i, d := range j.Dirs {
 				dst := fmt.Sprintf("%s/%d", remoteStage, i)
 				fmt.Printf("Copying %s -> %s:%s\n", d.Local, server, dst)
-				args := append([]string{"-az"}, rsyncIgnoreFilters(d.Local)...)
+				args := append([]string{"-az", "--copy-links"}, rsyncIgnoreFilters(d.Local)...)
 				args = append(args, "-e", "ssh",
 					"--rsync-path", "mkdir -p "+shellQuote(dst)+" && rsync",
 					strings.TrimRight(d.Local, "/")+"/", server+":"+dst+"/")
