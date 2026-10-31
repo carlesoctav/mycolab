@@ -29,7 +29,18 @@ grep -q '^colab:100000:' /etc/subgid || echo 'colab:100000:65536' >> /etc/subgid
 mkdir -p /run/user/1001/podman && chown -R colab:colab /run/user/1001 && chmod 700 /run/user/1001
 
 rm -f /usr/local/bin/crun-noprocpatch
-su - colab -c 'mkdir -p ~/.config/containers && printf "[containers]\ncgroups = \"enabled\"\ndefault_sysctls = []\nvolumes = [\"/proc:/proc\"]\n[engine]\nevents_logger = \"file\"\nruntime = \"crun\"\ncgroup_manager = \"cgroupfs\"\n" > ~/.config/containers/containers.conf && printf "[storage]\ndriver = \"overlay\"\n[storage.options.overlay]\nmount_program = \"/usr/bin/fuse-overlayfs\"\n" > ~/.config/containers/storage.conf'
+su - colab -c 'mkdir -p ~/.config/containers && printf "[containers]\ncgroups = \"enabled\"\ndefault_sysctls = []\nvolumes = [\"/proc:/proc\"]\n[engine]\nevents_logger = \"file\"\nruntime = \"crun\"\ncgroup_manager = \"cgroupfs\"\ncompose_warning_logs = false\n" > ~/.config/containers/containers.conf && printf "[storage]\ndriver = \"overlay\"\n[storage.options.overlay]\nmount_program = \"/usr/bin/fuse-overlayfs\"\n" > ~/.config/containers/storage.conf'
+
+mkdir -p /etc/containers
+if [ ! -f /etc/containers/containers.conf ]; then
+    printf "[engine]\ncompose_warning_logs = false\n" > /etc/containers/containers.conf
+elif grep -q "compose_warning_logs" /etc/containers/containers.conf; then
+    sed -i "s/compose_warning_logs\s*=.*/compose_warning_logs = false/" /etc/containers/containers.conf
+elif grep -q '\[engine\]' /etc/containers/containers.conf; then
+    sed -i '/\[engine\]/a compose_warning_logs = false' /etc/containers/containers.conf
+else
+    printf "\n[engine]\ncompose_warning_logs = false\n" >> /etc/containers/containers.conf
+fi
 
 if command -v nvidia-ctk &>/dev/null && [ -d /usr/lib64-nvidia ]; then
     mkdir -p /etc/cdi
