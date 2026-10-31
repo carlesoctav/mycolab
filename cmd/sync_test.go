@@ -195,4 +195,61 @@ func TestPrintAgentInstructions(t *testing.T) {
 	printAgentInstructions("/home/user/project", "trainer", "/content/project")
 }
 
+func TestRenderLsyncdConfigSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	extDir := t.TempDir()
+	extSub := filepath.Join(extDir, "scripts")
+	if err := os.Mkdir(extSub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Symlinked directory outside dir -> should get extra sync block
+	if err := os.Symlink(extSub, filepath.Join(dir, "scripts")); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Symlinked file -> should be ignored (not a directory)
+	filePath := filepath.Join(extDir, "file.txt")
+	if err := os.WriteFile(filePath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filePath, filepath.Join(dir, "file.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Symlink inside dir -> should be ignored (already watched)
+	internalDir := filepath.Join(dir, "internal")
+	if err := os.Mkdir(internalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(internalDir, filepath.Join(dir, "internal_link")); err != nil {
+		t.Fatal(err)
+	}
+
+	conf := renderLsyncdConfig(dir, "trainer", "/content/proj", false)
+
+	// Primary sync block
+	if !strings.Contains(conf, `source    = "`+dir+`"`) {
+		t.Errorf("conf missing primary sync: %s", conf)
+	}
+
+	// Extra sync block for external symlink
+	wantExtra := `source    = "` + extSub + `"`
+	if !strings.Contains(conf, wantExtra) {
+		t.Errorf("conf missing extra sync for symlink %q:\n%s", wantExtra, conf)
+	}
+	wantTarget := `targetdir = "/content/proj/scripts"`
+	if !strings.Contains(conf, wantTarget) {
+		t.Errorf("conf missing extra sync targetdir %q:\n%s", wantTarget, conf)
+	}
+
+	// Internal link and file link should NOT have their own sync blocks
+	if strings.Contains(conf, `source    = "`+internalDir+`"`) {
+		t.Errorf("conf should not contain extra sync for internal link: %s", conf)
+	}
+	if strings.Contains(conf, `source    = "`+filePath+`"`) {
+		t.Errorf("conf should not contain extra sync for file link: %s", conf)
+	}
+}
+
 

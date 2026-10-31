@@ -166,6 +166,21 @@ func loadSyncExcludes(localDir string) []string {
 	return excludes
 }
 
+// isSyncExcluded checks if a file/dir name matches any exclude pattern.
+func isSyncExcluded(name string, excludes []string) bool {
+	cleanName := strings.Trim(name, "/")
+	for _, e := range excludes {
+		cleanE := strings.Trim(e, "/")
+		if cleanName == cleanE {
+			return true
+		}
+		if matched, _ := filepath.Match(cleanE, cleanName); matched {
+			return true
+		}
+	}
+	return false
+}
+
 // renderLsyncdConfig creates the Lua configuration string for lsyncd.
 func renderLsyncdConfig(sourceDir, sessionName, targetDir string, daemon bool) string {
 	excludes := loadSyncExcludes(sourceDir)
@@ -180,7 +195,8 @@ func renderLsyncdConfig(sourceDir, sessionName, targetDir string, daemon bool) s
 		nodaemonStr = "false"
 	}
 
-	return fmt.Sprintf(`settings {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf(`settings {
     logfile    = "/tmp/lsyncd-%s-%s.log",
     statusFile = "/tmp/lsyncd-%s-%s.status",
     pidfile    = "/tmp/lsyncd-%s-%s.pid",
@@ -206,7 +222,80 @@ sync {
         _extra   = { "--copy-links" },
     },
 }
-`, slug, sessionName, slug, sessionName, slug, sessionName, nodaemonStr, sourceDir, sessionName, targetDir, strings.Join(exclLines, "\n"))
+`, slug, sessionName, slug, sessionName, slug, sessionName, nodaemonStr, sourceDir, sessionName, targetDir, strings.Join(exclLines, "\n")))
+
+	// Inotify does not follow directory symlinks, so edits inside symlinked
+	// folders would be missed by lsyncd. Emit an extra sync block for each
+	// top-level symlinked directory so inotify watches the real targets directly.
+	absSource, err := filepath.Abs(sourceDir)
+	if err != nil {
+		absSource = sourceDir
+	}
+	entries, err := os.ReadDir(absSource)
+	if err == nil {
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name() < entries[j].Name()
+		})
+		seenTargets := map[string]bool{absSource: true}
+		for _, entry := range entries {
+			if entry.Type()&os.ModeSymlink == 0 {
+				continue
+			}
+			if isSyncExcluded(entry.Name(), excludes) {
+				continue
+			}
+			linkPath := filepath.Join(absSource, entry.Name())
+			resolved, err := filepath.EvalSymlinks(linkPath)
+			if err != nil {
+				continue
+			}
+			absResolved, err := filepath.Abs(resolved)
+			if err != nil {
+				continue
+			}
+			fi, err := os.Stat(absResolved)
+			if err != nil || !fi.IsDir() {
+				continue
+			}
+			if rel, err := filepath.Rel(absSource, absResolved); err == nil && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
+				continue
+			}
+			if seenTargets[absResolved] {
+				continue
+			}
+			seenTargets[absResolved] = true
+
+			subExcludes := loadSyncExcludes(absResolved)
+			var subExclLines []string
+			for _, se := range subExcludes {
+				subExclLines = append(subExclLines, fmt.Sprintf("        %q,", se))
+			}
+			remoteSubDir := strings.TrimRight(targetDir, "/") + "/" + entry.Name()
+
+			sb.WriteString(fmt.Sprintf(`
+sync {
+    default.rsyncssh,
+    source    = %q,
+    host      = %q,
+    targetdir = %q,
+    delay     = 1,
+    delete    = false,
+
+    exclude = {
+%s
+    },
+
+    rsync = {
+        archive  = true,
+        compress = true,
+        _extra   = { "--copy-links" },
+    },
+}
+`, absResolved, sessionName, remoteSubDir, strings.Join(subExclLines, "\n")))
+		}
+	}
+
+	return sb.String()
 }
 
 // runSessionSync writes /tmp/<session>.conf.lua and starts lsyncd.
