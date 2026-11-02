@@ -73,7 +73,7 @@ mycolab run -s trainer --gpu L4 \
 | Flag | Description |
 | --- | --- |
 | `--dir <local>:<remote>` | Directory mapping to rsync to the runtime (repeatable; the first is the working directory). Respects `.gitignore`. |
-| `-v, --volume <bucket>:<remote>[:ro]` | Hugging Face bucket to mount via `hf-mount` (repeatable; uses `HF_TOKEN` from `mycolab env`). |
+| `-v, --volume <bucket>:<remote>[:ro|:aw]` | Hugging Face bucket to mount via `hf-mount` (repeatable; `:ro` for read-only, `:aw` for `--advanced-writes`; uses `HF_TOKEN` from `mycolab env`). |
 | `-S, --sidecar "[name:]cmd"` | Auxiliary background command to run in a concurrent tmux window (repeatable; format `[name:]cmd`). |
 | `--timeout <duration>` | Auto-stop the Colab session if execution exceeds duration (e.g. `2h`, `30m`). |
 | `--reuse` | Use an existing session instead of launching a fresh runtime. |
@@ -220,7 +220,7 @@ Colab allows a single concurrent proxy connection per runtime. Each managed entr
 - **Base CLI tools**: Installs `fd`, `rg`, and `jq` via apt, plus the latest stable Neovim as an AppImage in `/usr/local/bin` (`--no-tools` skips it). Re-runs are a no-op when already present.
 - **Podman container runtime**: Configures rootless Podman with `fuse-overlayfs`, Docker Compose v2, background socket service, `/var/run/docker.sock` symlink for Docker SDK compatibility, GPU CDI support, and user mappings so container workflows (`podman`, `podman compose`, `docker`) can run inside Colab without root cgroup errors (`--podman` enables this; skipped by default).
 - **Skip all push steps**: `--no-all` skips all runtime push steps (`tmux`, `terminfo`, `env`, `hosts`, `tools`) in one flag.
-- **Volume mounts**: Mounts Hugging Face Storage Buckets via `hf-mount --fuse` automatically upon runtime setup using `-v / --volume <bucket>:<remote>[:ro]` (repeatable; uses `HF_TOKEN` from `mycolab env`).
+- **Volume mounts**: Mounts Hugging Face Storage Buckets via `hf-mount --fuse` automatically upon runtime setup using `-v / --volume <bucket>:<remote>[:ro|:aw]` (repeatable; supports `:ro` for read-only and `:aw` for `--advanced-writes`; uses `HF_TOKEN` from `mycolab env`).
 
 ## Notes
 

@@ -116,6 +116,8 @@ func buildServerRunRemoteArgs(cmd *cobra.Command, j *job, staged []dirMap) []str
 		v := m.Bucket + ":" + m.Remote
 		if m.ReadOnly {
 			v += ":ro"
+		} else if m.AdvancedWrites {
+			v += ":aw"
 		}
 		remote = append(remote, "-v", v)
 	}

@@ -14,30 +14,42 @@ import (
 
 // mountSpec mounts an HF bucket at a runtime dir (via hf-mount).
 type mountSpec struct {
-	Bucket   string
-	Remote   string
-	ReadOnly bool
+	Bucket         string
+	Remote         string
+	ReadOnly       bool
+	AdvancedWrites bool
 }
 
 // bindVolumeFlags registers the -v/--volume flag on c.
 func bindVolumeFlags(c *cobra.Command) {
-	c.Flags().StringArrayP("volume", "v", nil, "hf_bucket:colab_dir[:ro] to mount on the runtime with hf-mount (repeatable)")
+	c.Flags().StringArrayP("volume", "v", nil, "hf_bucket:colab_dir[:ro|:rw|:aw] to mount on the runtime with hf-mount (repeatable)")
 }
 
-// parseMount parses "[hf://buckets/]<bucket_id>:<mount_path>[:ro]".
+// parseMount parses "[hf://buckets/]<bucket_id>:<mount_path>[:ro|:rw|:aw]".
 // Bucket is user/name[/subpath].
 func parseMount(s string) (mountSpec, error) {
 	orig := s
 	readOnly := false
-	if strings.HasSuffix(s, ":ro") {
-		readOnly = true
-		s = strings.TrimSuffix(s, ":ro")
-	} else if strings.HasSuffix(s, ":rw") {
-		s = strings.TrimSuffix(s, ":rw")
+	advancedWrites := false
+	for {
+		if strings.HasSuffix(s, ":ro") {
+			readOnly = true
+			s = strings.TrimSuffix(s, ":ro")
+		} else if strings.HasSuffix(s, ":rw") {
+			s = strings.TrimSuffix(s, ":rw")
+		} else if strings.HasSuffix(s, ":aw") {
+			advancedWrites = true
+			s = strings.TrimSuffix(s, ":aw")
+		} else {
+			break
+		}
+	}
+	if readOnly && advancedWrites {
+		return mountSpec{}, fmt.Errorf("invalid -v %q: cannot combine :ro and :aw (advanced writes require a writable mount)", orig)
 	}
 	i := strings.LastIndex(s, ":")
 	if i <= 0 || i == len(s)-1 {
-		return mountSpec{}, fmt.Errorf("invalid -v %q (want [hf://buckets/]bucket:colab_dir[:ro])", orig)
+		return mountSpec{}, fmt.Errorf("invalid -v %q (want [hf://buckets/]bucket:colab_dir[:ro|:rw|:aw])", orig)
 	}
 	bucket, remote := s[:i], s[i+1:]
 	bucket = strings.TrimPrefix(bucket, "hf://buckets/")
@@ -53,21 +65,24 @@ func parseMount(s string) (mountSpec, error) {
 		cleanRemote = "/"
 	}
 	return mountSpec{
-		Bucket:   bucket,
-		Remote:   cleanRemote,
-		ReadOnly: readOnly,
+		Bucket:         bucket,
+		Remote:         cleanRemote,
+		ReadOnly:       readOnly,
+		AdvancedWrites: advancedWrites,
 	}, nil
 }
 
 // mountScript mounts a bucket on the runtime. HF_TOKEN reaches ssh sessions
 // via `mycolab env HF_TOKEN <token>`.
 func (m mountSpec) mountScript() string {
-	ro := ""
+	extra := ""
 	if m.ReadOnly {
-		ro = " --read-only"
+		extra = " --read-only"
+	} else if m.AdvancedWrites {
+		extra = " --advanced-writes"
 	}
 	return fmt.Sprintf(`mkdir -p %s && hf-mount start --fuse%s ${HF_TOKEN:+--hf-token "$HF_TOKEN"} bucket %s %s`,
-		shellQuote(m.Remote), ro, m.Bucket, shellQuote(m.Remote))
+		shellQuote(m.Remote), extra, m.Bucket, shellQuote(m.Remote))
 }
 
 // runSessionCommand executes script on session over SSH.

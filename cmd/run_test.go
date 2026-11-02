@@ -289,11 +289,19 @@ func TestBuildServerRunRemoteArgsForwards(t *testing.T) {
 		ID:             "xyz789",
 		LocalForwards:  []string{"8000:localhost:8000", "8001:localhost:8001"},
 		RemoteForwards: []string{"8002:localhost:8002"},
+		Mounts: []mountSpec{
+			{Bucket: "org/rw-bucket", Remote: "/content/rw"},
+			{Bucket: "org/ro-bucket", Remote: "/content/ro", ReadOnly: true},
+			{Bucket: "org/aw-bucket", Remote: "/content/aw", AdvancedWrites: true},
+		},
 		Command:        []string{"python", "train.py"},
 	}
 	remote := buildServerRunRemoteArgs(c, j, nil)
 	joined := strings.Join(remote, " ")
 	for _, want := range []string{
+		"-v org/rw-bucket:/content/rw",
+		"-v org/ro-bucket:/content/ro:ro",
+		"-v org/aw-bucket:/content/aw:aw",
 		"-L 8000:localhost:8000",
 		"-L 8001:localhost:8001",
 		"-R 8002:localhost:8002",
