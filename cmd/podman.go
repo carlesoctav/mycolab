@@ -108,6 +108,8 @@ if ! grep -q "docker.io" /etc/containers/registries.conf 2>/dev/null; then
 fi
 ln -sf /usr/local/bin/podman /usr/local/bin/docker
 ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
+mkdir -p /run/user/1001/containers && chown colab:colab /run/user/1001/containers 2>/dev/null || true
+chmod 700 /run/user/1001/containers 2>/dev/null || true
 echo "PODMAN_OK"
 `
 

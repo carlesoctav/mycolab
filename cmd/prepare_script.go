@@ -6,13 +6,38 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
+// loadLocalContainersAuth checks ~/.config/containers/auth.json or ~/.docker/config.json
+// on the local machine for container registry credentials.
+var loadLocalContainersAuth = func() ([]byte, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return nil, nil
+	}
+	candidates := []string{
+		filepath.Join(home, ".config", "containers", "auth.json"),
+		filepath.Join(home, ".docker", "config.json"),
+	}
+	for _, p := range candidates {
+		if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
+			return data, nil
+		}
+	}
+	return nil, nil
+}
+
 func renderPrepareScript() string {
 	tmuxB64 := base64.StdEncoding.EncodeToString([]byte(tmuxConf))
 	terminfoB64 := base64.StdEncoding.EncodeToString([]byte(terminfoPayload()))
+
+	var authB64 string
+	if authData, _ := loadLocalContainersAuth(); len(authData) > 0 {
+		authB64 = base64.StdEncoding.EncodeToString(authData)
+	}
 
 	var sb strings.Builder
 	sb.WriteString(`set -e
@@ -221,8 +246,19 @@ INNER_EOF
         ln -sf /usr/local/bin/podman /usr/local/bin/docker
         ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
     fi
-fi
+
+    mkdir -p /run/user/1001/containers && chown colab:colab /run/user/1001/containers 2>/dev/null || true
+    chmod 700 /run/user/1001/containers 2>/dev/null || true
 `)
+
+	if authB64 != "" {
+		sb.WriteString(`    echo '` + authB64 + `' | base64 -d > /run/user/1001/containers/auth.json
+    chown colab:colab /run/user/1001/containers/auth.json
+    chmod 600 /run/user/1001/containers/auth.json
+`)
+	}
+
+	sb.WriteString("fi\n")
 	return sb.String()
 }
 
