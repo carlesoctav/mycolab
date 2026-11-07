@@ -13,9 +13,9 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 		"/dev/net/tun",
 		"useradd -m -s /bin/bash colab",
 		"docker-compose",
-		`mount_program = \"/usr/bin/fuse-overlayfs\"`,
+		`mount_program = "/usr/bin/fuse-overlayfs"`,
 		`cgroups = \"enabled\"`,
-		`driver = \"overlay\"`,
+		`driver = "overlay"`,
 		`compose_warning_logs = false`,
 		`unqualified-search-registries = [\"docker.io\"]`,
 		"ln -sf /usr/local/bin/podman /usr/local/bin/docker",
@@ -29,6 +29,13 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 		"/run/podman-service.lock",
 		"PODMAN_ALREADY_INSTALLED",
 		"PODMAN_OK",
+		"/usr/local/bin/podman-mode",
+		"/usr/local/bin/podman-mode tmpfs",
+		"/etc/podman-mode",
+		"additionalimagestores",
+		"/dev/shm/podman-storage",
+		"/usr/local/bin/crane",
+		"rust-just",
 	} {
 		if !strings.Contains(podmanSetupScript, want) {
 			t.Errorf("podmanSetupScript missing expected snippet: %q", want)
@@ -61,7 +68,12 @@ func TestPushPodmanUnknownSession(t *testing.T) {
 
 func TestPushPodmanSuccess(t *testing.T) {
 	orig := runPodmanSetup
-	defer func() { runPodmanSetup = orig }()
+	origAuth := loadLocalContainersAuth
+	defer func() {
+		runPodmanSetup = orig
+		loadLocalContainersAuth = origAuth
+	}()
+	loadLocalContainersAuth = func() ([]byte, error) { return nil, nil }
 
 	var calledSession, calledScript string
 	runPodmanSetup = func(session, script string) ([]byte, error) {
@@ -76,6 +88,34 @@ func TestPushPodmanSuccess(t *testing.T) {
 	}
 	if calledScript != podmanSetupScript {
 		t.Errorf("calledScript mismatch")
+	}
+}
+
+func TestPushPodmanWithAuth(t *testing.T) {
+	orig := runPodmanSetup
+	origAuth := loadLocalContainersAuth
+	defer func() {
+		runPodmanSetup = orig
+		loadLocalContainersAuth = origAuth
+	}()
+
+	fakeAuth := []byte(`{"auths":{"example.com":{"auth":"dGVzdA=="}}}`)
+	loadLocalContainersAuth = func() ([]byte, error) {
+		return fakeAuth, nil
+	}
+
+	var calledScript string
+	runPodmanSetup = func(session, script string) ([]byte, error) {
+		calledScript = script
+		return []byte("PODMAN_OK\n"), nil
+	}
+
+	pushPodman("test-sess", true)
+	if !strings.Contains(calledScript, "/run/user/1001/containers/auth.json") {
+		t.Errorf("calledScript missing /run/user/1001/containers/auth.json")
+	}
+	if !strings.Contains(calledScript, "/root/.docker/config.json") {
+		t.Errorf("calledScript missing /root/.docker/config.json")
 	}
 }
 

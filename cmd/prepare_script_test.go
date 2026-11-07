@@ -20,7 +20,7 @@ func TestRenderPrepareScript(t *testing.T) {
 		"useradd -m -s /bin/bash colab",
 		"/dev/net/tun",
 		"docker-compose",
-		`mount_program = \"/usr/bin/fuse-overlayfs\"`,
+		`mount_program = "/usr/bin/fuse-overlayfs"`,
 		`compose_warning_logs = false`,
 		`unqualified-search-registries = [\"docker.io\"]`,
 		"ln -sf /usr/local/bin/podman /usr/local/bin/docker",
@@ -33,6 +33,13 @@ func TestRenderPrepareScript(t *testing.T) {
 		"flock 200",
 		"/run/podman-service.lock",
 		`/usr/bin/podman "$@"`,
+		"/usr/local/bin/podman-mode",
+		"/usr/local/bin/podman-mode tmpfs",
+		"/etc/podman-mode",
+		"additionalimagestores",
+		"/dev/shm/podman-storage",
+		"/usr/local/bin/crane",
+		"rust-just",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("renderPrepareScript missing %q", want)
@@ -83,6 +90,12 @@ func TestRenderPrepareScriptWithAuth(t *testing.T) {
 	}
 	if !strings.Contains(s, "chmod 600 /run/user/1001/containers/auth.json") {
 		t.Errorf("renderPrepareScript missing chmod for auth.json")
+	}
+	if !strings.Contains(s, "/root/.docker/config.json") {
+		t.Errorf("renderPrepareScript missing /root/.docker/config.json")
+	}
+	if !strings.Contains(s, "chmod 600 /root/.docker/config.json") {
+		t.Errorf("renderPrepareScript missing chmod for /root/.docker/config.json")
 	}
 }
 
