@@ -22,6 +22,11 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 		"ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock",
 		"/run/user/1001/containers",
 		`chown -R colab:colab "$dest_dir"`,
+		"start-stop-daemon --start",
+		"start-stop-daemon --status",
+		"/run/user/1001/podman.pid",
+		"flock 200",
+		"/run/podman-service.lock",
 		"PODMAN_ALREADY_INSTALLED",
 		"PODMAN_OK",
 	} {

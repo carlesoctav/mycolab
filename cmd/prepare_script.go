@@ -190,9 +190,18 @@ if [ "$with_podman" = "true" ]; then
             chmod 755 /usr/local/bin/docker-compose
         fi
 
-        pkill -f 'podman system service' 2>/dev/null || true
-        rm -f /run/user/1001/podman/podman.sock
-        runuser -u colab -- env XDG_RUNTIME_DIR=/run/user/1001 nohup /usr/bin/podman system service --time=0 unix:///run/user/1001/podman/podman.sock >/tmp/podman-service.log 2>&1 &
+        start-stop-daemon --stop --oknodo --pidfile /run/user/1001/podman.pid --user colab --exec /usr/bin/podman 2>/dev/null || true
+        rm -f /run/user/1001/podman/podman.sock /run/user/1001/podman.pid
+        env XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+            start-stop-daemon --start --oknodo \
+                --background \
+                --make-pidfile \
+                --pidfile /run/user/1001/podman.pid \
+                --chuid colab:colab \
+                --user colab \
+                --exec /usr/bin/podman \
+                --output /tmp/podman-service.log \
+                -- system service --time=0 unix:///run/user/1001/podman/podman.sock
 
         chmod 755 /root
 
@@ -225,13 +234,30 @@ if [ "$(id -u)" -eq 0 ]; then
     if [ ! -S /run/user/1001/podman/podman.sock ] || ! curl -s --unix-socket /run/user/1001/podman/podman.sock http://localhost/_ping &>/dev/null; then
         mkdir -p /run/user/1001/podman
         chown -R colab:colab /run/user/1001
-        rm -f /run/user/1001/podman/podman.sock
-        runuser -u colab -- env XDG_RUNTIME_DIR=/run/user/1001 nohup /usr/bin/podman system service --time=0 unix:///run/user/1001/podman/podman.sock >/tmp/podman-service.log 2>&1 &
-        for i in {1..30}; do
-            [ -S /run/user/1001/podman/podman.sock ] && break
-            sleep 0.1
-        done
-        ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
+        chmod 700 /run/user/1001
+        (
+            flock 200
+            if [ ! -S /run/user/1001/podman/podman.sock ] || ! curl -s --unix-socket /run/user/1001/podman/podman.sock http://localhost/_ping &>/dev/null; then
+                if ! start-stop-daemon --status --pidfile /run/user/1001/podman.pid --user colab --exec /usr/bin/podman 2>/dev/null; then
+                    rm -f /run/user/1001/podman/podman.sock /run/user/1001/podman.pid
+                fi
+                env XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+                    start-stop-daemon --start --oknodo \
+                        --background \
+                        --make-pidfile \
+                        --pidfile /run/user/1001/podman.pid \
+                        --chuid colab:colab \
+                        --user colab \
+                        --exec /usr/bin/podman \
+                        --output /tmp/podman-service.log \
+                        -- system service --time=0 unix:///run/user/1001/podman/podman.sock
+                for i in {1..30}; do
+                    [ -S /run/user/1001/podman/podman.sock ] && break
+                    sleep 0.1
+                done
+                ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
+            fi
+        ) 200>/run/podman-service.lock
     fi
 
     exec runuser -u colab -- /usr/bin/podman "$@"
