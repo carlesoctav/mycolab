@@ -35,6 +35,7 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 		"additionalimagestores",
 		"/dev/shm/podman-storage",
 		"size=80%",
+		"REGISTRY_AUTH_FILE",
 		"/usr/local/bin/crane",
 		"rust-just",
 	} {
@@ -115,8 +116,17 @@ func TestPushPodmanWithAuth(t *testing.T) {
 	if !strings.Contains(calledScript, "/run/user/1001/containers/auth.json") {
 		t.Errorf("calledScript missing /run/user/1001/containers/auth.json")
 	}
+	if !strings.Contains(calledScript, "/home/colab/.docker/config.json") {
+		t.Errorf("calledScript missing /home/colab/.docker/config.json")
+	}
+	if !strings.Contains(calledScript, "/home/colab/.config/containers/auth.json") {
+		t.Errorf("calledScript missing /home/colab/.config/containers/auth.json")
+	}
 	if !strings.Contains(calledScript, "/root/.docker/config.json") {
 		t.Errorf("calledScript missing /root/.docker/config.json")
+	}
+	if !strings.Contains(calledScript, "chmod 644 /root/.docker/config.json") {
+		t.Errorf("calledScript missing chmod 644 /root/.docker/config.json")
 	}
 }
 

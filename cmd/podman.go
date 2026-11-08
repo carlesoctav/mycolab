@@ -90,7 +90,7 @@ restart_service() {
     mkdir -p /run/user/1001/podman
     chown -R colab:colab /run/user/1001
     chmod 700 /run/user/1001
-    env XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+    env XDG_RUNTIME_DIR=/run/user/1001 REGISTRY_AUTH_FILE=/run/user/1001/containers/auth.json USER=colab HOME=/home/colab \
         start-stop-daemon --start --oknodo \
             --background \
             --make-pidfile \
@@ -266,6 +266,18 @@ if [ "$(id -u)" -eq 0 ]; then
     export XDG_RUNTIME_DIR=/run/user/1001
     export HOME=/home/colab
     export USER=colab
+    export REGISTRY_AUTH_FILE=/run/user/1001/containers/auth.json
+
+    if [ -f /run/user/1001/containers/auth.json ]; then
+        mkdir -p /home/colab/.config/containers /home/colab/.docker /root/.docker
+        cp /run/user/1001/containers/auth.json /home/colab/.config/containers/auth.json
+        cp /run/user/1001/containers/auth.json /home/colab/.docker/config.json
+        chown -R colab:colab /home/colab/.config/containers /home/colab/.docker
+        chmod 600 /home/colab/.config/containers/auth.json /home/colab/.docker/config.json
+        cp /run/user/1001/containers/auth.json /root/.docker/config.json
+        chmod 755 /root/.docker
+        chmod 644 /root/.docker/config.json
+    fi
 
     # Ensure host destination is writable by colab for podman cp
     for arg in "$@"; do
@@ -296,7 +308,7 @@ if [ "$(id -u)" -eq 0 ]; then
                 if ! start-stop-daemon --status --pidfile /run/user/1001/podman.pid --user colab --exec /usr/bin/podman 2>/dev/null; then
                     rm -f /run/user/1001/podman/podman.sock /run/user/1001/podman.pid
                 fi
-                env XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+                env XDG_RUNTIME_DIR=/run/user/1001 REGISTRY_AUTH_FILE=/run/user/1001/containers/auth.json USER=colab HOME=/home/colab \
                     start-stop-daemon --start --oknodo \
                         --background \
                         --make-pidfile \
@@ -383,7 +395,19 @@ func pushPodman(session string, sessionKnown bool) {
 	script := podmanSetupScript
 	if authData, _ := loadLocalContainersAuth(); len(authData) > 0 {
 		authB64 := base64.StdEncoding.EncodeToString(authData)
-		script += fmt.Sprintf("\nmkdir -p /run/user/1001/containers /root/.docker\necho '%s' | base64 -d > /run/user/1001/containers/auth.json\nchown colab:colab /run/user/1001/containers/auth.json\nchmod 600 /run/user/1001/containers/auth.json\necho '%s' | base64 -d > /root/.docker/config.json\nchmod 600 /root/.docker/config.json\n", authB64, authB64)
+		script += fmt.Sprintf(`
+mkdir -p /run/user/1001/containers /home/colab/.config/containers /home/colab/.docker /root/.docker
+echo '%s' | base64 -d > /run/user/1001/containers/auth.json
+chown colab:colab /run/user/1001/containers/auth.json
+chmod 600 /run/user/1001/containers/auth.json
+cp /run/user/1001/containers/auth.json /home/colab/.config/containers/auth.json
+cp /run/user/1001/containers/auth.json /home/colab/.docker/config.json
+chown -R colab:colab /home/colab/.config/containers /home/colab/.docker
+chmod 600 /home/colab/.config/containers/auth.json /home/colab/.docker/config.json
+cp /run/user/1001/containers/auth.json /root/.docker/config.json
+chmod 755 /root/.docker
+chmod 644 /root/.docker/config.json
+`, authB64)
 	}
 	out, err := runPodmanSetup(session, script)
 	if err != nil {

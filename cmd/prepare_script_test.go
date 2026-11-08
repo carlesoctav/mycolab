@@ -39,6 +39,7 @@ func TestRenderPrepareScript(t *testing.T) {
 		"additionalimagestores",
 		"/dev/shm/podman-storage",
 		"size=80%",
+		"REGISTRY_AUTH_FILE",
 		"/usr/local/bin/crane",
 		"rust-just",
 	} {
@@ -92,11 +93,17 @@ func TestRenderPrepareScriptWithAuth(t *testing.T) {
 	if !strings.Contains(s, "chmod 600 /run/user/1001/containers/auth.json") {
 		t.Errorf("renderPrepareScript missing chmod for auth.json")
 	}
+	if !strings.Contains(s, "/home/colab/.docker/config.json") {
+		t.Errorf("renderPrepareScript missing /home/colab/.docker/config.json")
+	}
+	if !strings.Contains(s, "/home/colab/.config/containers/auth.json") {
+		t.Errorf("renderPrepareScript missing /home/colab/.config/containers/auth.json")
+	}
 	if !strings.Contains(s, "/root/.docker/config.json") {
 		t.Errorf("renderPrepareScript missing /root/.docker/config.json")
 	}
-	if !strings.Contains(s, "chmod 600 /root/.docker/config.json") {
-		t.Errorf("renderPrepareScript missing chmod for /root/.docker/config.json")
+	if !strings.Contains(s, "chmod 644 /root/.docker/config.json") {
+		t.Errorf("renderPrepareScript missing chmod 644 for /root/.docker/config.json")
 	}
 }
 
