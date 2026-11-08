@@ -38,6 +38,7 @@ func TestRenderPrepareScript(t *testing.T) {
 		"/etc/podman-mode",
 		"additionalimagestores",
 		"/dev/shm/podman-storage",
+		"size=80%",
 		"/usr/local/bin/crane",
 		"rust-just",
 	} {

@@ -249,7 +249,7 @@ case "$cmd" in
     tmpfs)
         echo "Switching podman to tmpfs mode (hybrid: disk images + RAM native overlay)..."
         stop_service
-        mount -o remount,size=40G /dev/shm 2>/dev/null || true
+        mount -o remount,size=80% /dev/shm 2>/dev/null || true
         mkdir -p /dev/shm/podman-storage
         chown -R colab:colab /dev/shm/podman-storage
         chmod 700 /dev/shm/podman-storage
@@ -425,7 +425,7 @@ if [ "$(id -u)" -eq 0 ]; then
         mkdir -p /run/user/1001/podman /dev/shm/podman-storage
         chown -R colab:colab /run/user/1001 /dev/shm/podman-storage
         chmod 700 /run/user/1001 /dev/shm/podman-storage
-        mount -o remount,size=40G /dev/shm 2>/dev/null || true
+        mount -o remount,size=80% /dev/shm 2>/dev/null || true
         (
             flock 200
             if [ ! -S /run/user/1001/podman/podman.sock ] || ! curl -s --unix-socket /run/user/1001/podman/podman.sock http://localhost/_ping &>/dev/null; then
