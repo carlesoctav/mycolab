@@ -201,7 +201,7 @@ cat > /usr/local/bin/podman <<'INNER_EOF'
 #!/bin/bash
 DISK_FLAGS=(
     --root /home/colab/.local/share/containers/storage
-    --runroot /run/user/1001/containers
+    --runroot /run/user/1001/containers-disk
     --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs
 )
 
