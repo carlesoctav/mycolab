@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -32,6 +33,8 @@ var (
 	// CCUInfoURL reports CU balance, hourly burn rate and assignment count.
 	// authuser=0 is required: without it the backend answers HTTP 400.
 	CCUInfoURL = "https://colab.research.google.com/tun/m/ccu-info?authuser=0"
+	// AssignmentsURL lists active assignments on the Colab backend.
+	AssignmentsURL = "https://colab.research.google.com/tun/m/assignments?authuser=0"
 	// UserinfoURL resolves the account email for a token.
 	UserinfoURL = "https://www.googleapis.com/oauth2/v3/userinfo"
 	// HTTPClient performs backend requests.
@@ -263,3 +266,96 @@ func GetUsage(name string) (*Usage, error) {
 	}
 	return u, nil
 }
+
+// RuntimeProxyInfo holds proxy connection info for a running runtime.
+type RuntimeProxyInfo struct {
+	Token                 string `json:"token"`
+	TokenExpiresInSeconds int64  `json:"tokenExpiresInSeconds"`
+	URL                   string `json:"url"`
+}
+
+// Assignment represents one active assignment returned by Colab backend.
+type Assignment struct {
+	Endpoint         string           `json:"endpoint"`
+	Variant          int              `json:"variant"`
+	MachineShape     int              `json:"machineShape"`
+	Accelerator      string           `json:"accelerator"`
+	RuntimeProxyInfo RuntimeProxyInfo `json:"runtimeProxyInfo"`
+}
+
+type assignmentsResponse struct {
+	Assignments []Assignment `json:"assignments"`
+}
+
+// ListAssignments queries the active assignments on the Colab backend for profileName.
+func ListAssignments(profileName string) ([]Assignment, error) {
+	token, err := accessToken(profileName)
+	if err != nil {
+		return nil, err
+	}
+	var resp assignmentsResponse
+	if err := getJSON(AssignmentsURL, token, &resp); err != nil {
+		return nil, fmt.Errorf("profile %q: %w", profileName, err)
+	}
+	return resp.Assignments, nil
+}
+
+// VariantString maps the integer variant to user-facing name.
+func VariantString(v int) string {
+	switch v {
+	case 1:
+		return "GPU"
+	case 2:
+		return "TPU"
+	default:
+		return "DEFAULT"
+	}
+}
+
+// ShapeString maps the integer machine shape to user-facing name.
+func ShapeString(s int) string {
+	switch s {
+	case 1:
+		return "HIGH_RAM"
+	default:
+		return "STANDARD"
+	}
+}
+
+var (
+	tunRegex   = regexp.MustCompile(`/tun/m/([a-zA-Z0-9_-]+)`)
+	proxyRegex = regexp.MustCompile(`(?:^|//)(?:\d+-)?([a-zA-Z0-9_-]+)-c\.[a-z0-9-]+\.prod\.r\.colab\.dev`)
+	epRegex    = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+)
+
+// ExtractEndpoint parses a URL, fragment, proxy URL, or bare string into an endpoint ID.
+func ExtractEndpoint(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if m := tunRegex.FindStringSubmatch(raw); len(m) > 1 {
+		return m[1]
+	}
+	if m := proxyRegex.FindStringSubmatch(raw); len(m) > 1 {
+		return m[1]
+	}
+	if u, err := url.Parse(raw); err == nil {
+		q := u.Query()
+		if dbu := q.Get("dbu"); dbu != "" {
+			if m := tunRegex.FindStringSubmatch(dbu); len(m) > 1 {
+				return m[1]
+			}
+		}
+		if u.Fragment != "" {
+			if m := tunRegex.FindStringSubmatch(u.Fragment); len(m) > 1 {
+				return m[1]
+			}
+		}
+	}
+	if epRegex.MatchString(raw) {
+		return raw
+	}
+	return raw
+}
+

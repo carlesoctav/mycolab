@@ -34,17 +34,27 @@ func TestColabNewArgs(t *testing.T) {
 
 // The ssh setup flags must exist on every command that runs the setup:
 // 'prepare' itself (hidden; regression: they used to be registered in
-// scattered inits), 'new', and 'server new'.
+// scattered inits), 'new', 'server new', and 'connect'.
 func TestSSHSetupFlagsPresent(t *testing.T) {
 	for name, c := range map[string]*cobra.Command{
 		"prepare":    prepareCmd,
 		"new":        newCmd,
 		"server new": serverNewCmd,
+		"connect":    connectCmd,
 	} {
 		for _, f := range sshSetupFlagNames {
 			if c.Flags().Lookup(f) == nil {
 				t.Errorf("%s: missing --%s flag", name, f)
 			}
+		}
+	}
+	for name, c := range map[string]*cobra.Command{
+		"prepare": prepareCmd,
+		"new":     newCmd,
+		"connect": connectCmd,
+	} {
+		if c.Flags().Lookup("volume") == nil {
+			t.Errorf("%s: missing --volume flag", name)
 		}
 	}
 	for name, c := range map[string]*cobra.Command{"new": newCmd, "server new": serverNewCmd} {

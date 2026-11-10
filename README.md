@@ -35,6 +35,7 @@ mycolab list                                # * marks the active profile
 mycolab use                                 # interactive picker (j/k or arrows, Enter)
 mycolab use work                            # switch profile directly
 mycolab new -s trainer --gpu L4             # create session, configure ssh, sync env & tools
+mycolab connect -s trainer [url]            # connect existing session (from web UI or URL) & wire ssh
 mycolab stop -s trainer                     # stop session
 ssh trainer                                 # connect over ssh (after Include step)
 
@@ -196,6 +197,30 @@ Profiles live under `~/.config/mycolab`:
 Each session gets its own hostname, allowing multiple sessions to stay usable side by side; the entry is updated in place. Managed entries whose session exists in no profile are pruned as inactive (`--no-prune` skips this); foreign entries are always left alone. (A legacy single-host `Host colab` entry from older mycolab versions is removed on the next run.)
 
 > **Note**: `new` with an existing name replaces the runtime.
+
+### Connecting Existing Sessions (`mycolab connect`)
+
+If a session was launched directly from the Colab web interface or from another environment, it exists as an orphaned assignment on Google's backend (shown as `[?] <endpoint>` in `colab sessions`).
+
+`mycolab connect` brings that remote assignment into local state and wires SSH:
+
+```bash
+# Auto-detect and adopt the active orphaned session
+mycolab connect -s trainer
+
+# Connect by full Colab URL, tunnel URL, or proxy URL
+mycolab connect -s trainer "https://colab.research.google.com/tun/m/gpu-a100-hm-ass1c0-5giphe4pf32o"
+
+# Connect by endpoint ID directly
+mycolab connect -s trainer gpu-a100-hm-ass1c0-5giphe4pf32o
+
+# Connect and mount HF storage buckets
+mycolab connect -s trainer -v myuser/data:/content/data
+```
+
+Once connected, plain `ssh <session>` works immediately.
+
+Both `mycolab prepare` and `mycolab connect` support `-v/--volume` to mount Hugging Face Storage Buckets on demand.
 
 Your main `~/.ssh/config` needs one line to pick up managed hosts:
 

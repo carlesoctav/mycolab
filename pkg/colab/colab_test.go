@@ -207,3 +207,59 @@ func TestGetUsageCcuError(t *testing.T) {
 		t.Fatal("GetUsage with 401 ccu-info = nil, want error")
 	}
 }
+
+func TestListAssignments(t *testing.T) {
+	tempHome(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer access-123" {
+			t.Errorf("Authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(")]}'\n" + `{"assignments":[{"endpoint":"ep-1","variant":1,"machineShape":1,"accelerator":"A100","runtimeProxyInfo":{"token":"jwt-123","tokenExpiresInSeconds":3600,"url":"https://proxy.example"}}]}`))
+	}))
+	defer server.Close()
+	oldAssignments := colab.AssignmentsURL
+	colab.AssignmentsURL = server.URL
+	defer func() { colab.AssignmentsURL = oldAssignments }()
+
+	writeToken(t, "work", validTokenBody("https://unused.example/token", time.Now().Add(time.Hour)))
+
+	assignments, err := colab.ListAssignments("work")
+	if err != nil {
+		t.Fatalf("ListAssignments failed: %v", err)
+	}
+	if len(assignments) != 1 {
+		t.Fatalf("got %d assignments, want 1", len(assignments))
+	}
+	a := assignments[0]
+	if a.Endpoint != "ep-1" || a.Accelerator != "A100" || a.RuntimeProxyInfo.URL != "https://proxy.example" {
+		t.Errorf("unexpected assignment: %+v", a)
+	}
+	if got := colab.VariantString(a.Variant); got != "GPU" {
+		t.Errorf("VariantString = %q, want GPU", got)
+	}
+	if got := colab.ShapeString(a.MachineShape); got != "HIGH_RAM" {
+		t.Errorf("ShapeString = %q, want HIGH_RAM", got)
+	}
+}
+
+func TestExtractEndpoint(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"gpu-a100-hm-ass1c0-5giphe4pf32o", "gpu-a100-hm-ass1c0-5giphe4pf32o"},
+		{"https://colab.research.google.com/tun/m/gpu-a100-hm-ass1c0-5giphe4pf32o", "gpu-a100-hm-ass1c0-5giphe4pf32o"},
+		{"/tun/m/gpu-a100-hm-ass1c0-5giphe4pf32o", "gpu-a100-hm-ass1c0-5giphe4pf32o"},
+		{"https://colab.research.google.com/notebooks/empty.ipynb?dbu=/tun/m/gpu-a100-hm-ass1c0-5giphe4pf32o#datalabBackendUrl=https://colab.research.google.com/tun/m/gpu-a100-hm-ass1c0-5giphe4pf32o", "gpu-a100-hm-ass1c0-5giphe4pf32o"},
+		{"https://colab.research.google.com/drive/123#datalabBackendUrl=/tun/m/gpu-a100-hm-ass1c0-5giphe4pf32o", "gpu-a100-hm-ass1c0-5giphe4pf32o"},
+		{"https://8080-gpu-a100-hm-ass1c0-5giphe4pf32o-c.asia-southeast1.prod.r.colab.dev", "gpu-a100-hm-ass1c0-5giphe4pf32o"},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		got := colab.ExtractEndpoint(tc.input)
+		if got != tc.want {
+			t.Errorf("ExtractEndpoint(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+

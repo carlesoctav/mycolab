@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -62,7 +63,32 @@ command offers to add it); afterwards connect with 'ssh <session>'.`,
 		if err != nil {
 			return err
 		}
-		return runSSHSetup(cmd, sessionName)
+		if err := runSSHSetup(cmd, sessionName); err != nil {
+			return err
+		}
+		volumes, _ := cmd.Flags().GetStringArray("volume")
+		var mounts []mountSpec
+		for _, v := range volumes {
+			m, err := parseMount(v)
+			if err != nil {
+				return err
+			}
+			mounts = append(mounts, m)
+		}
+		if err := mountVolumes(sessionName, mounts); err != nil {
+			return err
+		}
+		forwards, err := forwardArgsFromFlags(cmd)
+		if err != nil {
+			return err
+		}
+		if len(forwards) > 0 {
+			logf := func(format string, a ...any) { fmt.Printf("[mycolab prepare] "+format+"\n", a...) }
+			if err := ensureMaster(context.Background(), sessionName, logf, setupMasterBudget, forwards...); err != nil {
+				return err
+			}
+		}
+		return nil
 	},
 }
 
@@ -581,6 +607,8 @@ func promptYesNo(question string, def bool) bool {
 
 func init() {
 	bindSSHSetupFlags(prepareCmd)
+	bindVolumeFlags(prepareCmd)
+	bindForwardFlags(prepareCmd)
 	rootCmd.AddCommand(prepareCmd)
 }
 
