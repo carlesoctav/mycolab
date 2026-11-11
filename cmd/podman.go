@@ -19,7 +19,8 @@ if command -v podman >/dev/null 2>&1 && [ -f /usr/local/bin/docker-compose ] && 
 fi
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq && apt-get install -y -qq podman fuse-overlayfs slirp4netns uidmap conmon crun iptables curl
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa* 2>/dev/null || true
+apt-get update -qq -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 && apt-get install -y -qq podman fuse-overlayfs slirp4netns uidmap conmon crun iptables curl
 
 mkdir -p /dev/net; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200; chmod 666 /dev/net/tun
 chmod 666 /dev/fuse 2>/dev/null || true

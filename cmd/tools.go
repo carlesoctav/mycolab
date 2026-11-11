@@ -26,7 +26,8 @@ const (
 // before the marker.
 func toolsInstallStdin() string {
 	return "(command -v rg && command -v jq && command -v nvim && (command -v fd || command -v fdfind) && command -v mount.nfs && command -v tmux) >/dev/null 2>&1 || " +
-		"(apt-get update -qq && " +
+		"(rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa* 2>/dev/null || true; " +
+		"apt-get update -qq -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 && " +
 		"DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl fd-find ripgrep jq nfs-common tmux && " +
 		"(DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libfuse2 || true) && " +
 		"curl -fsSL -o /usr/local/bin/nvim " + nvimAppImageURL + " && " +

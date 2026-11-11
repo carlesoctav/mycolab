@@ -147,7 +147,8 @@ if [ "$need_base" = "true" ] || [ "$need_podman" = "true" ]; then
     if [ "$need_podman" = "true" ]; then
         APT_PKGS="$APT_PKGS podman fuse-overlayfs slirp4netns uidmap conmon crun iptables curl"
     fi
-    apt-get update -qq && apt-get install -y -qq $APT_PKGS
+    rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa* 2>/dev/null || true
+    apt-get update -qq -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 && apt-get install -y -qq $APT_PKGS
 fi
 
 if [ "$need_base" = "true" ]; then
