@@ -117,10 +117,23 @@ func colabNewArgs(cmd *cobra.Command, session string) []string {
 	return args
 }
 
+const colabNewRequestTimeout = "86400"
+
 var (
-	runColabNewAttempt = runColabForegroundContext
+	runColabNewAttempt = runColabNewProcess
 	colabNewRetryDelay = backoffForAttempt
 )
+
+func colabNewCmdEnv() []string {
+	if _, ok := os.LookupEnv("COLAB_CLI_REQUEST_TIMEOUT"); ok {
+		return nil
+	}
+	return append(os.Environ(), "COLAB_CLI_REQUEST_TIMEOUT="+colabNewRequestTimeout)
+}
+
+func runColabNewProcess(ctx context.Context, colabBin string, args []string) error {
+	return runColabForegroundEnv(ctx, colabBin, colabNewCmdEnv(), args)
+}
 
 // runColabNewWithRetry runs 'colab new' in a loop until it succeeds or ctx is
 // cancelled. This rides out colab-cli timeouts and transient backend failures
@@ -147,11 +160,12 @@ func runColabNewWithRetry(ctx context.Context, colabBin string, args []string) e
 // runColabForeground runs the colab binary with args, streaming stdio both
 // ways so login flows and progress output work.
 func runColabForeground(colabBin string, args []string) error {
-	return runColabForegroundContext(context.Background(), colabBin, args)
+	return runColabForegroundEnv(context.Background(), colabBin, nil, args)
 }
 
-func runColabForegroundContext(ctx context.Context, colabBin string, args []string) error {
+func runColabForegroundEnv(ctx context.Context, colabBin string, env, args []string) error {
 	c := exec.CommandContext(ctx, colabBin, args...)
+	c.Env = env
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr

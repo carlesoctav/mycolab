@@ -3,6 +3,8 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -178,5 +180,40 @@ func TestRunColabNewWithRetryStopsOnCancel(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestRunColabNewProcessSetsRequestTimeout(t *testing.T) {
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "timeout.txt")
+	stub := filepath.Join(dir, "colab")
+	script := "#!/bin/sh\nprintf '%s' \"$COLAB_CLI_REQUEST_TIMEOUT\" > \"" + outFile + "\"\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("COLAB_CLI_REQUEST_TIMEOUT", "")
+	os.Unsetenv("COLAB_CLI_REQUEST_TIMEOUT")
+	if err := runColabNewProcess(context.Background(), stub, []string{"new", "-s", "trainer"}); err != nil {
+		t.Fatalf("runColabNewProcess() = %v, want nil", err)
+	}
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != colabNewRequestTimeout {
+		t.Fatalf("COLAB_CLI_REQUEST_TIMEOUT = %q, want %q", string(got), colabNewRequestTimeout)
+	}
+
+	t.Setenv("COLAB_CLI_REQUEST_TIMEOUT", "42")
+	if err := runColabNewProcess(context.Background(), stub, []string{"new", "-s", "trainer"}); err != nil {
+		t.Fatalf("runColabNewProcess(override) = %v, want nil", err)
+	}
+	got, err = os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "42" {
+		t.Fatalf("COLAB_CLI_REQUEST_TIMEOUT override = %q, want 42", string(got))
 	}
 }
