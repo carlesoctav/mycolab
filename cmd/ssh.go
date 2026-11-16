@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
+	"syscall"
 
 	"github.com/carlesoctav/mycolab/pkg/profile"
 	"github.com/spf13/cobra"
@@ -65,10 +67,14 @@ func resolveBridgeSession(session string) (string, error) {
 	return colabBin, nil
 }
 
-// runBridge execs the colab websocket bridge with stdio attached,
-// propagating its exit code for the ProxyCommand slot.
+// runBridge launches the colab websocket bridge in its own detached session
+// with stdio attached, propagating its exit code for the ProxyCommand slot.
+// Detaching keeps a transient caller's PTY hangup or process-group signal from
+// killing the shared mux tunnel underneath other ssh sessions.
 func runBridge(colabBin, session string) error {
+	signal.Ignore(syscall.SIGHUP)
 	c := exec.Command(colabBin, "ssh", "--proxy-mode", "-s", session)
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := c.Run(); err != nil {
 		var exitErr *exec.ExitError

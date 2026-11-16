@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -61,5 +64,34 @@ func TestResolveBridgeSessionNoProfile(t *testing.T) {
 		t.Fatal("nil error, want no-active-profile error")
 	} else if !strings.Contains(err.Error(), "no active profile") {
 		t.Errorf("error = %q", err)
+	}
+}
+
+func TestRunBridgeDetachesSession(t *testing.T) {
+	t.Cleanup(func() { signal.Reset(syscall.SIGHUP) })
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "ids.txt")
+	stub := filepath.Join(dir, "colab")
+	script := fmt.Sprintf("#!/bin/sh\nps -o pid=,pgid= -p $$ > %q\n", outFile)
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runBridge(stub, "trainer"); err != nil {
+		t.Fatalf("runBridge() = %v, want nil", err)
+	}
+	raw, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(string(raw))
+	if len(fields) != 2 {
+		t.Fatalf("ps output = %q, want 2 fields", string(raw))
+	}
+	childPID, childPGID := fields[0], fields[1]
+	if childPID != childPGID {
+		t.Fatalf("child pid=%s pgid=%s, want own process group (Setsid)", childPID, childPGID)
+	}
+	if childPGID == fmt.Sprintf("%d", syscall.Getpgrp()) {
+		t.Fatalf("child pgid=%s matches parent pgid, want detached", childPGID)
 	}
 }
