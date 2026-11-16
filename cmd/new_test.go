@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -114,5 +117,66 @@ func TestForwardFlagsPresent(t *testing.T) {
 	}
 	if newCmd.Flags().ShorthandLookup("R") == nil {
 		t.Errorf("newCmd: missing -R shorthand")
+	}
+}
+
+func TestRunColabNewWithRetrySucceedsAfterFailures(t *testing.T) {
+	origAttempt := runColabNewAttempt
+	origDelay := colabNewRetryDelay
+	t.Cleanup(func() {
+		runColabNewAttempt = origAttempt
+		colabNewRetryDelay = origDelay
+	})
+
+	attempts := 0
+	var delayCalls []int
+	runColabNewAttempt = func(ctx context.Context, colabBin string, args []string) error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("timed out")
+		}
+		return nil
+	}
+	colabNewRetryDelay = func(n int) time.Duration {
+		delayCalls = append(delayCalls, n)
+		return time.Millisecond
+	}
+
+	if err := runColabNewWithRetry(context.Background(), "colab", []string{"new", "-s", "trainer"}); err != nil {
+		t.Fatalf("runColabNewWithRetry() = %v, want nil", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+	if len(delayCalls) != 2 || delayCalls[0] != 1 || delayCalls[1] != 2 {
+		t.Fatalf("delayCalls = %v, want [1 2]", delayCalls)
+	}
+}
+
+func TestRunColabNewWithRetryStopsOnCancel(t *testing.T) {
+	origAttempt := runColabNewAttempt
+	origDelay := colabNewRetryDelay
+	t.Cleanup(func() {
+		runColabNewAttempt = origAttempt
+		colabNewRetryDelay = origDelay
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	attempts := 0
+	runColabNewAttempt = func(ctx context.Context, colabBin string, args []string) error {
+		attempts++
+		return errors.New("failed")
+	}
+	colabNewRetryDelay = func(n int) time.Duration {
+		cancel()
+		return time.Hour
+	}
+
+	err := runColabNewWithRetry(ctx, "colab", []string{"new", "-s", "trainer"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runColabNewWithRetry() = %v, want context.Canceled", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }

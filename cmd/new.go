@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/carlesoctav/mycolab/pkg/profile"
 	"github.com/spf13/cobra"
@@ -15,8 +18,9 @@ import (
 var newCmd = &cobra.Command{
 	Use:   "new",
 	Short: "Create a Colab session, then wire it for ssh",
-	Long: `Run 'colab new' for -s/--session in the active profile, then wire
-it for ssh (Host entry plus runtime push steps):
+	Long: `Run 'colab new' for -s/--session in the active profile (retrying in a
+loop if 'colab new' fails), then wire it for ssh (Host entry plus
+runtime push steps):
 
     mycolab new -s trainer --gpu L4
     mycolab new -s trainer --gpu L4 -v me/data:/content/data
@@ -42,6 +46,10 @@ reclaims it).`,
 			}
 			mounts = append(mounts, m)
 		}
+		forwards, err := forwardArgsFromFlags(cmd)
+		if err != nil {
+			return err
+		}
 		current, err := profile.GetCurrent()
 		if err != nil {
 			return err
@@ -53,7 +61,10 @@ reclaims it).`,
 		if err != nil {
 			return fmt.Errorf("colab binary not found in PATH")
 		}
-		if err := runColabForeground(colabBin, colabNewArgs(cmd, sessionName)); err != nil {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		err = runColabNewWithRetry(ctx, colabBin, colabNewArgs(cmd, sessionName))
+		stop()
+		if err != nil {
 			return err
 		}
 		dropMaster(sessionName)
@@ -61,10 +72,6 @@ reclaims it).`,
 			return err
 		}
 		if err := mountVolumes(sessionName, mounts); err != nil {
-			return err
-		}
-		forwards, err := forwardArgsFromFlags(cmd)
-		if err != nil {
 			return err
 		}
 		if len(forwards) > 0 {
@@ -110,10 +117,41 @@ func colabNewArgs(cmd *cobra.Command, session string) []string {
 	return args
 }
 
+var (
+	runColabNewAttempt = runColabForegroundContext
+	colabNewRetryDelay = backoffForAttempt
+)
+
+// runColabNewWithRetry runs 'colab new' in a loop until it succeeds or ctx is
+// cancelled. This rides out colab-cli timeouts and transient backend failures
+// without modifying colab-cli itself.
+func runColabNewWithRetry(ctx context.Context, colabBin string, args []string) error {
+	for attempt := 1; ; attempt++ {
+		err := runColabNewAttempt(ctx, colabBin, args)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		d := colabNewRetryDelay(attempt)
+		fmt.Fprintf(os.Stderr, "[mycolab new] attempt %d failed (%v); retrying in %s...\n", attempt, err, d)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(d):
+		}
+	}
+}
+
 // runColabForeground runs the colab binary with args, streaming stdio both
 // ways so login flows and progress output work.
 func runColabForeground(colabBin string, args []string) error {
-	c := exec.Command(colabBin, args...)
+	return runColabForegroundContext(context.Background(), colabBin, args)
+}
+
+func runColabForegroundContext(ctx context.Context, colabBin string, args []string) error {
+	c := exec.CommandContext(ctx, colabBin, args...)
 	c.Stdin = os.Stdin
 	c.Stdout = os.Stdout
 	c.Stderr = os.Stderr
@@ -167,4 +205,3 @@ func forwardArgsFromFlags(cmd *cobra.Command) ([]string, error) {
 	}
 	return args, nil
 }
-
