@@ -13,14 +13,32 @@ import (
 // podmanSetupScript is the bash script that installs and configures rootless podman
 // for use inside Colab runtimes.
 const podmanSetupScript = `set -e
-if command -v podman >/dev/null 2>&1 && [ -f /usr/local/bin/docker-compose ] && [ -f /usr/local/bin/podman-mode ] && [ -f /usr/local/bin/crane ] && command -v just >/dev/null 2>&1; then
+if /usr/bin/podman --version 2>/dev/null | grep -q "6\.2\.0" && /usr/bin/crun --version 2>/dev/null | grep -q "1\.30\.1" && /usr/local/bin/docker-compose version 2>/dev/null | grep -q "v5\.8\.0" && [ -f /usr/local/lib/podman/.netavark-colab-patch-v0.1.0 ] && [ -f /usr/local/bin/.podman-healthcheckd-colab-patch-v0.1.0 ] && [ -x /usr/local/bin/podman-healthcheckd ] && command -v nvidia-ctk >/dev/null 2>&1 && ([ ! -d /usr/lib64-nvidia ] || [ -f /etc/cdi/nvidia.yaml ]) && [ -f /usr/local/bin/podman-mode ] && [ -f /usr/local/bin/crane ] && command -v just >/dev/null 2>&1; then
+    touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
+    env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+        start-stop-daemon --start --oknodo \
+            --background \
+            --make-pidfile \
+            --pidfile /run/user/1001/podman-healthcheckd.pid \
+            --chuid colab:colab \
+            --user colab \
+            --exec /usr/local/bin/podman-healthcheckd \
+            --output /var/log/podman-healthcheckd.log
     echo "PODMAN_ALREADY_INSTALLED"
     exit 0
 fi
 
 export DEBIAN_FRONTEND=noninteractive
+APT_PKGS="podman fuse-overlayfs slirp4netns uidmap conmon crun iptables curl"
 rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*ppa* 2>/dev/null || true
-apt-get update -qq -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 && apt-get install -y -qq podman fuse-overlayfs slirp4netns uidmap conmon crun iptables curl
+if ! command -v nvidia-ctk >/dev/null 2>&1; then
+    mkdir -p /usr/share/keyrings
+    curl -fsSL --connect-timeout 10 https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    curl -fsSL --connect-timeout 10 https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+        sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    APT_PKGS="$APT_PKGS nvidia-container-toolkit"
+fi
+apt-get update -qq -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 && apt-get install -y -qq $APT_PKGS
 
 mkdir -p /dev/net; [ -e /dev/net/tun ] || mknod /dev/net/tun c 10 200; chmod 666 /dev/net/tun
 chmod 666 /dev/fuse 2>/dev/null || true
@@ -31,7 +49,7 @@ grep -q '^colab:100000:' /etc/subgid || echo 'colab:100000:65536' >> /etc/subgid
 mkdir -p /run/user/1001/podman && chown -R colab:colab /run/user/1001 && chmod 700 /run/user/1001
 
 rm -f /usr/local/bin/crun-noprocpatch
-su - colab -c 'mkdir -p ~/.config/containers && printf "[containers]\ncgroups = \"enabled\"\ndefault_sysctls = []\nvolumes = [\"/proc:/proc\"]\n[engine]\nevents_logger = \"file\"\nruntime = \"crun\"\ncgroup_manager = \"cgroupfs\"\ncompose_warning_logs = false\n" > ~/.config/containers/containers.conf'
+su - colab -c 'mkdir -p ~/.config/containers && printf "[containers]\ncgroups = \"enabled\"\ndefault_sysctls = []\nvolumes = [\"/proc:/proc\"]\n[engine]\nevents_logger = \"file\"\nruntime = \"crun\"\ncgroup_manager = \"cgroupfs\"\ncompose_warning_logs = false\nhelper_binaries_dir = [\"/usr/local/lib/podman\", \"/usr/libexec/podman\", \"/usr/lib/podman\"]\n" > ~/.config/containers/containers.conf'
 
 mkdir -p /etc/containers
 if [ ! -f /etc/containers/containers.conf ]; then
@@ -44,14 +62,46 @@ else
     printf "\n[engine]\ncompose_warning_logs = false\n" >> /etc/containers/containers.conf
 fi
 
-if command -v nvidia-ctk &>/dev/null && [ -d /usr/lib64-nvidia ]; then
-    mkdir -p /etc/cdi
-    nvidia-ctk cdi generate --library-search-path=/usr/lib64-nvidia --output=/etc/cdi/nvidia.yaml 2>/dev/null
-    chmod 644 /etc/cdi/nvidia.yaml
+if ! /usr/bin/podman --version 2>/dev/null | grep -q "6\.2\.0" || ! /usr/bin/crun --version 2>/dev/null | grep -q "1\.30\.1"; then
+    start-stop-daemon --stop --oknodo --pidfile /run/user/1001/podman.pid --user colab 2>/dev/null || true
+    pkill -9 -u colab -f 'podman system service' 2>/dev/null || true
+    tmp_podman="$(mktemp -d)"
+    curl -fsSL https://github.com/mgoltzsche/podman-static/releases/download/v6.2.0/podman-linux-amd64.tar.gz | tar --no-same-owner -xz -C "$tmp_podman"
+    install -m 755 "$tmp_podman/podman-linux-amd64/usr/local/bin/podman" /usr/bin/podman
+    install -m 755 "$tmp_podman/podman-linux-amd64/usr/local/bin/crun" /usr/bin/crun
+    rm -f "$tmp_podman/podman-linux-amd64/usr/local/bin/podman"
+    cp -af --remove-destination "$tmp_podman"/podman-linux-amd64/usr/local/* /usr/local/
+    rm -rf "$tmp_podman"
+    rm -f /usr/local/lib/podman/.netavark-colab-patch-v0.1.0
 fi
 
-if [ ! -f /usr/local/bin/docker-compose ]; then
-    curl -fsSL -o /usr/local/bin/docker-compose https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64
+if [ ! -f /usr/local/lib/podman/.netavark-colab-patch-v0.1.0 ]; then
+    mkdir -p /usr/local/lib/podman
+    curl -fsSL -o /usr/local/lib/podman/netavark https://github.com/carlesoctav/podman-colab-patch/releases/download/v0.1.0/netavark-linux-amd64
+    chmod 755 /usr/local/lib/podman/netavark
+    touch /usr/local/lib/podman/.netavark-colab-patch-v0.1.0
+fi
+
+if [ ! -f /usr/local/bin/.podman-healthcheckd-colab-patch-v0.1.0 ] || [ ! -x /usr/local/bin/podman-healthcheckd ]; then
+    start-stop-daemon --stop --oknodo --pidfile /run/user/1001/podman-healthcheckd.pid --user colab --exec /usr/local/bin/podman-healthcheckd 2>/dev/null || true
+    pkill -9 -u colab -x podman-healthcheckd 2>/dev/null || true
+    curl -fsSL -o /usr/local/bin/podman-healthcheckd https://github.com/carlesoctav/podman-colab-patch/releases/download/v0.1.0/podman-healthcheckd-linux-amd64
+    chmod 755 /usr/local/bin/podman-healthcheckd
+    touch /usr/local/bin/.podman-healthcheckd-colab-patch-v0.1.0
+fi
+
+if [ -d /usr/lib64-nvidia ]; then
+    echo "/usr/lib64-nvidia" > /etc/ld.so.conf.d/nvidia.conf
+    ldconfig
+    if command -v nvidia-ctk &>/dev/null; then
+        mkdir -p /etc/cdi
+        nvidia-ctk cdi generate --library-search-path=/usr/lib64-nvidia --output=/etc/cdi/nvidia.yaml 2>/dev/null
+        chmod 644 /etc/cdi/nvidia.yaml
+    fi
+fi
+
+if ! /usr/local/bin/docker-compose version 2>/dev/null | grep -q "v5\.8\.0"; then
+    curl -fsSL -o /usr/local/bin/docker-compose https://github.com/docker/compose/releases/download/v5.8.0/docker-compose-linux-x86_64
     chmod 755 /usr/local/bin/docker-compose
 fi
 
@@ -81,7 +131,9 @@ CONF_FILE="/home/colab/.config/containers/storage.conf"
 stop_service() {
     start-stop-daemon --stop --oknodo --pidfile /run/user/1001/podman.pid --user colab --exec /usr/bin/podman 2>/dev/null || true
     pkill -9 -u colab -f 'podman system service' 2>/dev/null || true
-    rm -f /run/user/1001/podman/podman.sock /run/user/1001/podman.pid /run/podman-service.lock
+    start-stop-daemon --stop --oknodo --pidfile /run/user/1001/podman-healthcheckd.pid --user colab --exec /usr/local/bin/podman-healthcheckd 2>/dev/null || true
+    pkill -9 -u colab -x podman-healthcheckd 2>/dev/null || true
+    rm -f /run/user/1001/podman/podman.sock /run/user/1001/podman.pid /run/user/1001/podman-healthcheckd.pid /run/podman-service.lock
 }
 
 restart_service() {
@@ -106,6 +158,18 @@ restart_service() {
         sleep 0.1
     done
     ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
+    if [ -x /usr/local/bin/podman-healthcheckd ]; then
+        touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
+        env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+            start-stop-daemon --start --oknodo \
+                --background \
+                --make-pidfile \
+                --pidfile /run/user/1001/podman-healthcheckd.pid \
+                --chuid colab:colab \
+                --user colab \
+                --exec /usr/local/bin/podman-healthcheckd \
+                --output /var/log/podman-healthcheckd.log
+    fi
 }
 
 cmd="${1:-status}"
@@ -326,6 +390,18 @@ if [ "$(id -u)" -eq 0 ]; then
                 ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
             fi
         ) 200>/run/podman-service.lock
+    fi
+    if [ -x /usr/local/bin/podman-healthcheckd ] && ! start-stop-daemon --status --pidfile /run/user/1001/podman-healthcheckd.pid --user colab --exec /usr/local/bin/podman-healthcheckd 2>/dev/null; then
+        touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
+        env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+            start-stop-daemon --start --oknodo \
+                --background \
+                --make-pidfile \
+                --pidfile /run/user/1001/podman-healthcheckd.pid \
+                --chuid colab:colab \
+                --user colab \
+                --exec /usr/local/bin/podman-healthcheckd \
+                --output /var/log/podman-healthcheckd.log
     fi
 fi
 

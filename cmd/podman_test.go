@@ -8,8 +8,22 @@ import (
 
 func TestPodmanSetupScriptContent(t *testing.T) {
 	for _, want := range []string{
-		"apt-get install -y -qq podman",
+		"apt-get install -y -qq $APT_PKGS",
 		"fuse-overlayfs slirp4netns uidmap conmon crun iptables curl",
+		"nvidia-container-toolkit",
+		"nvidia-container-toolkit-keyring.gpg",
+		"/etc/ld.so.conf.d/nvidia.conf",
+		"nvidia-ctk cdi generate",
+		"mgoltzsche/podman-static/releases/download/v6.2.0/podman-linux-amd64.tar.gz",
+		"/usr/bin/crun",
+		"carlesoctav/podman-colab-patch/releases/download/v0.1.0/netavark-linux-amd64",
+		"/usr/local/lib/podman/netavark",
+		`helper_binaries_dir = [\"/usr/local/lib/podman\"`,
+		"carlesoctav/podman-colab-patch/releases/download/v0.1.0/podman-healthcheckd-linux-amd64",
+		"/usr/local/bin/podman-healthcheckd",
+		"/var/log/podman-healthcheckd.log",
+		"/run/user/1001/podman-healthcheckd.pid",
+		"docker/compose/releases/download/v5.8.0/docker-compose-linux-x86_64",
 		"/dev/net/tun",
 		"useradd -m -s /bin/bash colab",
 		"docker-compose",
@@ -46,8 +60,8 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 
 	// Crucial: wrapper must call /usr/bin/podman, NOT bare podman,
 	// to prevent infinite recursion via /usr/local/bin/podman.
-	if strings.Contains(podmanSetupScript, "exec /usr/local/bin/podman") ||
-		strings.Contains(podmanSetupScript, "exec podman") {
+	if strings.Contains(podmanSetupScript, "exec /usr/local/bin/podman ") ||
+		strings.Contains(podmanSetupScript, "exec podman ") {
 		t.Errorf("podmanSetupScript must not call bare podman or /usr/local/bin/podman in wrapper")
 	}
 }
