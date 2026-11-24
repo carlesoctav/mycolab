@@ -15,8 +15,8 @@ import (
 const podmanSetupScript = `set -e
 if /usr/bin/podman --version 2>/dev/null | grep -q "6\.2\.0" && /usr/bin/crun --version 2>/dev/null | grep -q "1\.30\.1" && /usr/local/bin/docker-compose version 2>/dev/null | grep -q "v5\.8\.0" && [ -f /usr/local/lib/podman/.netavark-colab-patch-v0.1.0 ] && [ -f /usr/local/bin/.podman-healthcheckd-colab-patch-v0.1.0 ] && [ -x /usr/local/bin/podman-healthcheckd ] && command -v nvidia-ctk >/dev/null 2>&1 && ([ ! -d /usr/lib64-nvidia ] || [ -f /etc/cdi/nvidia.yaml ]) && [ -f /usr/local/bin/podman-mode ] && [ -f /usr/local/bin/crane ] && command -v just >/dev/null 2>&1; then
     touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
-    env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
-        start-stop-daemon --start --oknodo \
+    env PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+        /usr/sbin/start-stop-daemon --start --oknodo \
             --background \
             --make-pidfile \
             --pidfile /run/user/1001/podman-healthcheckd.pid \
@@ -160,8 +160,8 @@ restart_service() {
     ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
     if [ -x /usr/local/bin/podman-healthcheckd ]; then
         touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
-        env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
-            start-stop-daemon --start --oknodo \
+        env PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+            /usr/sbin/start-stop-daemon --start --oknodo \
                 --background \
                 --make-pidfile \
                 --pidfile /run/user/1001/podman-healthcheckd.pid \
@@ -393,8 +393,8 @@ if [ "$(id -u)" -eq 0 ]; then
     fi
     if [ -x /usr/local/bin/podman-healthcheckd ] && ! start-stop-daemon --status --pidfile /run/user/1001/podman-healthcheckd.pid --user colab --exec /usr/local/bin/podman-healthcheckd 2>/dev/null; then
         touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
-        env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
-            start-stop-daemon --start --oknodo \
+        env PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+            /usr/sbin/start-stop-daemon --start --oknodo \
                 --background \
                 --make-pidfile \
                 --pidfile /run/user/1001/podman-healthcheckd.pid \

@@ -21,6 +21,7 @@ func TestPodmanSetupScriptContent(t *testing.T) {
 		`helper_binaries_dir = [\"/usr/local/lib/podman\"`,
 		"carlesoctav/podman-colab-patch/releases/download/v0.1.0/podman-healthcheckd-linux-amd64",
 		"/usr/local/bin/podman-healthcheckd",
+		"/usr/sbin/start-stop-daemon",
 		"/var/log/podman-healthcheckd.log",
 		"/run/user/1001/podman-healthcheckd.pid",
 		"docker/compose/releases/download/v5.8.0/docker-compose-linux-x86_64",

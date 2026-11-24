@@ -285,8 +285,8 @@ restart_service() {
     ln -sf /run/user/1001/podman/podman.sock /var/run/docker.sock
     if [ -x /usr/local/bin/podman-healthcheckd ]; then
         touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
-        env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
-            start-stop-daemon --start --oknodo \
+        env PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+            /usr/sbin/start-stop-daemon --start --oknodo \
                 --background \
                 --make-pidfile \
                 --pidfile /run/user/1001/podman-healthcheckd.pid \
@@ -518,8 +518,8 @@ if [ "$(id -u)" -eq 0 ]; then
     fi
     if [ -x /usr/local/bin/podman-healthcheckd ] && ! start-stop-daemon --status --pidfile /run/user/1001/podman-healthcheckd.pid --user colab --exec /usr/local/bin/podman-healthcheckd 2>/dev/null; then
         touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
-        env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
-            start-stop-daemon --start --oknodo \
+        env PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+            /usr/sbin/start-stop-daemon --start --oknodo \
                 --background \
                 --make-pidfile \
                 --pidfile /run/user/1001/podman-healthcheckd.pid \
@@ -567,8 +567,8 @@ INNER_EOF
 
     if [ -x /usr/local/bin/podman-healthcheckd ]; then
         touch /var/log/podman-healthcheckd.log && chown colab:colab /var/log/podman-healthcheckd.log
-        env PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
-            start-stop-daemon --start --oknodo \
+        env PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin XDG_RUNTIME_DIR=/run/user/1001 USER=colab HOME=/home/colab \
+            /usr/sbin/start-stop-daemon --start --oknodo \
                 --background \
                 --make-pidfile \
                 --pidfile /run/user/1001/podman-healthcheckd.pid \
